@@ -67,6 +67,7 @@ struct PanelRoot: View {
     @ObservedObject var setup: Setup
     var onFocus: (String) -> Void
     var onDecide: (String, PermissionDecision) -> Void
+    var onReply: (String, String) -> Void
     /// The glass's resting size, so the window can hit-test (and detect hover) against it.
     var onSize: (CGSize) -> Void
 
@@ -118,7 +119,9 @@ struct PanelRoot: View {
         case .done(let ids):
             let sessions = ids.compactMap { id in store.sessions.first { $0.id == id } }
             if !sessions.isEmpty {
-                DoneFlash(sessions: sessions)
+                let last = sessions[sessions.count - 1]
+                DoneFlash(sessions: sessions,
+                          onReply: store.replyable.contains(last.id) ? { ui.endDone(); ui.replyingID = last.id } : nil)
                     .reportSize(mode.key)
                     .onTapGesture {
                         ui.endDone()
@@ -127,7 +130,7 @@ struct PanelRoot: View {
                     .transition(transition)
             }
         case .expanded:
-            ExpandedPanel(store: store, ui: ui, setup: setup, onFocus: onFocus, onDecide: onDecide)
+            ExpandedPanel(store: store, ui: ui, setup: setup, onFocus: onFocus, onDecide: onDecide, onReply: onReply)
                 .reportSize(mode.key)
                 .transition(transition)
         }
@@ -250,6 +253,8 @@ struct UnseenRing: View {
 /// No sound and no banner; the dot keeps a ring afterwards so it can't be missed.
 struct DoneFlash: View {
     let sessions: [Session]
+    /// Set when the (latest) finished session can take a reply from the pill.
+    var onReply: (() -> Void)?
     @State private var checkIn = false
     @State private var sweep: CGFloat = -1
 
@@ -269,8 +274,13 @@ struct DoneFlash: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .fixedSize()
+            if let onReply {
+                Button(action: onReply) { Label("Reply", systemImage: "arrowshape.turn.up.left.fill") }
+                    .buttonStyle(DecisionButtonStyle(fill: nil))
+                    .help("Reply without leaving what you're doing")
+            }
         }
-        .frame(maxWidth: 300)
+        .frame(maxWidth: 420)
         .padding(.horizontal, 13)
         .frame(height: 32)
         .overlay(sheen)
@@ -354,6 +364,7 @@ struct ExpandedPanel: View {
     @ObservedObject var setup: Setup
     var onFocus: (String) -> Void
     var onDecide: (String, PermissionDecision) -> Void
+    var onReply: (String, String) -> Void
 
     /// Header, footer and a notice; whatever is left of the room from the pill's corner goes to the list.
     private let chrome: CGFloat = 120
@@ -396,7 +407,13 @@ struct ExpandedPanel: View {
                            onTap: { toggle(session.id) },
                            onFocus: { onFocus(session.id) },
                            onDismiss: { store.dismiss(session.id) },
-                           onDecide: { onDecide(session.id, $0) })
+                           onDecide: { onDecide(session.id, $0) },
+                           reply: store.replyable.contains(session.id)
+                               ? ReplyState(open: ui.replyingID == session.id,
+                                            onOpen: { ui.replyingID = session.id },
+                                            onSend: { onReply(session.id, $0) },
+                                            onCancel: { ui.replyingID = nil })
+                               : nil)
             }
         }
         .padding(.horizontal, 6)
@@ -422,6 +439,14 @@ struct ExpandedPanel: View {
                 Toggle("Connect to Claude Code", isOn: Binding(get: { setup.hooksEnabled && setup.hooks == .installed },
                                                                set: { setup.setHooksEnabled($0) }))
                 Toggle("Banner When a Session Finishes", isOn: $setup.bannerOnDone)
+                if let phone = setup.phoneStatus {
+                    Divider()
+                    Text(phone)
+                    Button("Open APNs Key Folder") {
+                        try? FileManager.default.createDirectory(at: PhoneBridge.keyDirectory, withIntermediateDirectories: true)
+                        NSWorkspace.shared.open(PhoneBridge.keyDirectory)
+                    }
+                }
                 if setup.isBundled {
                     Toggle("Open at Login", isOn: Binding(get: { setup.launchesAtLogin },
                                                           set: { setup.setLaunchAtLogin($0) }))
@@ -519,6 +544,8 @@ struct SessionRow: View {
     var onFocus: () -> Void
     var onDismiss: () -> Void
     var onDecide: (PermissionDecision) -> Void
+    /// Set when this finished session can take a reply from the pill.
+    var reply: ReplyState?
     @State private var hovering = false
 
     var body: some View {
@@ -553,6 +580,18 @@ struct SessionRow: View {
                 DecisionButtons(onDecide: onDecide).padding(.leading, 16)
             }
             if expanded { details }
+            if let reply {
+                Group {
+                    if reply.open {
+                        ReplyField(onSend: reply.onSend, onCancel: reply.onCancel)
+                    } else {
+                        Button(action: reply.onOpen) { Label("Reply", systemImage: "arrowshape.turn.up.left.fill") }
+                            .buttonStyle(DecisionButtonStyle(fill: nil))
+                            .help("Send Claude its next message from here")
+                    }
+                }
+                .padding(.leading, 16)
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
@@ -583,7 +622,6 @@ struct SessionRow: View {
             HStack {
                 Button("Go to session", action: onFocus)
                     .controlSize(.small)
-                    .keyboardShortcut(.defaultAction)
                 Spacer()
                 Button("Dismiss", action: onDismiss)
                     .controlSize(.small)
@@ -627,5 +665,55 @@ struct DecisionButtonStyle: ButtonStyle {
             .background(Capsule().fill(fill ?? Color.primary.opacity(0.1)))
             .opacity(configuration.isPressed ? 0.7 : 1)
             .contentShape(Capsule())
+    }
+}
+
+struct ReplyState {
+    var open: Bool
+    var onOpen: () -> Void
+    var onSend: (String) -> Void
+    var onCancel: () -> Void
+}
+
+/// Inline follow-up for a finished session. Return sends, Esc cancels. The text wakes Claude through the
+/// session's waiting Stop hook, exactly as if it had been typed in the terminal.
+struct ReplyField: View {
+    var onSend: (String) -> Void
+    var onCancel: () -> Void
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    private var trimmed: String { text.trimmingCharacters(in: .whitespacesAndNewlines) }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 6) {
+            TextField("Reply to Claude…", text: $text, axis: .vertical)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .lineLimit(1...5)
+                .focused($focused)
+                .onSubmit(send)
+                .onExitCommand(perform: onCancel)
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(Color.primary.opacity(0.08)))
+            Button(action: send) {
+                Image(systemName: "arrow.up.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(trimmed.isEmpty ? Color.secondary : SessionStatus.working.color)
+            }
+            .buttonStyle(.plain)
+            .disabled(trimmed.isEmpty)
+            .help("Send (Return)")
+        }
+        .onAppear {
+            // The panel becomes key a beat after the field appears.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true }
+        }
+    }
+
+    private func send() {
+        guard !trimmed.isEmpty else { return }
+        onSend(trimmed)
     }
 }

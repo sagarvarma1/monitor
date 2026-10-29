@@ -5,9 +5,14 @@ import SwitchboardCore
 final class SessionStore: ObservableObject {
     @Published private(set) var sessions: [Session] = []
     @Published var serverError: String?
+    /// Sessions with a finished turn whose background Stop hook is waiting for a reply from the pill.
+    /// Not persisted: the waiting hooks don't survive a restart.
+    @Published private(set) var replyable: Set<String> = []
     var onBecameBlocked: ((Session) -> Void)?
     /// Sends an Allow/Deny to the waiting hook with this request id.
     var onDecide: ((String, PermissionDecision) -> Void)?
+    /// Sends a reply to the session's waiting Stop hook.
+    var onReply: ((String, String) -> Void)?
     /// Request ids that still have a prompt up; the server lets go of any other waiting hooks.
     var onActiveDecisionsChanged: ((Set<String>) -> Void)?
     /// Called after every change, so the UI can react (e.g. end a peek once that session no longer needs you).
@@ -90,6 +95,35 @@ final class SessionStore: ObservableObject {
         s.decisionID = nil
         s.need = decision == .deny ? "Denied from Switchboard" : "Approved from Switchboard"
         s.detail = ""
+        sessions[i] = s
+        db?.save(s)
+        sessions = sessions.sortedForDisplay()
+        changed()
+    }
+
+    func setReplyable(_ sessionID: String, _ available: Bool) {
+        guard replyable.contains(sessionID) != available else { return }
+        if available { replyable.insert(sessionID) } else { replyable.remove(sessionID) }
+        onUpdate?()
+    }
+
+    /// Wakes a finished session with a follow-up typed into the pill. Like `decide`, the UI moves on right away and
+    /// the hook events that follow confirm it.
+    func reply(_ sessionID: String, _ text: String) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, replyable.contains(sessionID),
+              let i = sessions.firstIndex(where: { $0.id == sessionID }) else { return }
+        onReply?(sessionID, text)
+        replyable.remove(sessionID)
+        var s = sessions[i]
+        if let start = s.waitingSince, Date() > start {
+            db?.addIdle(DateInterval(start: start, end: Date()))
+            refreshIdleTotal()
+        }
+        s.status = .working
+        s.waitingSince = nil
+        s.need = "Working on: \(Summarizer.oneLine(text, max: 70))"
+        s.detail = text
         sessions[i] = s
         db?.save(s)
         sessions = sessions.sortedForDisplay()

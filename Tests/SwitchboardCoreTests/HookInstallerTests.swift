@@ -58,6 +58,37 @@ final class HookInstallerTests: XCTestCase {
         }
         XCTAssertEqual(try scriptCommand("CMD"), HookInstaller.command(port: 7777))
         XCTAssertEqual(try scriptCommand("PERM_CMD"), HookInstaller.permissionCommand(port: 7777))
+        XCTAssertEqual(try scriptCommand("REPLY_CMD"), HookInstaller.replyCommand(port: 7777))
+    }
+
+    func testStopGetsABackgroundReplyHandler() {
+        let hooks = HookInstaller.installing(into: [:], port: 7777)["hooks"] as? [String: Any]
+        let handlers = (hooks?["Stop"] as? [[String: Any]])?.first?["hooks"] as? [[String: Any]]
+        XCTAssertEqual(handlers?.count, 2)
+        XCTAssertEqual(handlers?.last?["asyncRewake"] as? Bool, true)
+        XCTAssertEqual(handlers?.last?["command"] as? String, HookInstaller.replyCommand(port: 7777))
+    }
+
+    /// The reply command really does what the hook contract needs: exit 2 + reply on stderr, or exit 0 silently.
+    func testReplyCommandShellBehaviour() throws {
+        func run(_ body: String) throws -> (Int32, String) {
+            // Stand-in for curl that prints a canned body.
+            let cmd = HookInstaller.replyCommand(port: 7777)
+                .replacingOccurrences(of: #"curl -s --connect-timeout 0.2 -m 7190 -X POST -H "Content-Type: application/json" -H "X-Claude-PID: $PPID" --data-binary @- http://127.0.0.1:7777/reply"#,
+                                      with: "printf '%s' '\(body)'")
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/bin/sh")
+            p.arguments = ["-c", cmd]
+            let err = Pipe()
+            p.standardError = err
+            try p.run()
+            p.waitUntilExit()
+            return (p.terminationStatus, String(decoding: err.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self))
+        }
+        let replied = try run("also add tests")
+        XCTAssertEqual(replied.0, 2)
+        XCTAssertEqual(replied.1, "also add tests\n")
+        XCTAssertEqual(try run("").0, 0)
     }
 
     func testPermissionRequestGetsTheWaitingCommand() {
@@ -68,6 +99,15 @@ final class HookInstallerTests: XCTestCase {
     }
 
     /// Entries written by the previous version (fire-and-forget PermissionRequest) get upgraded on next launch.
+    func testPreviousVersionIsOutdated() {
+        var hooks: [String: Any] = [:]
+        for event in HookInstaller.events {
+            let command = event == "PermissionRequest" ? HookInstaller.permissionCommand(port: 7777) : HookInstaller.command(port: 7777)
+            hooks[event] = [["hooks": [["type": "command", "command": command, "timeout": 2]]]]
+        }
+        XCTAssertEqual(HookInstaller.status(of: ["hooks": hooks], port: 7777), .outdated, "no reply handler yet")
+    }
+
     func testOldPermissionHookIsOutdated() {
         var hooks: [String: Any] = [:]
         for event in HookInstaller.events {

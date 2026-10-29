@@ -20,6 +20,12 @@ final class EventServer {
     }
     /// Waiting PermissionRequest hooks by request id. Only touched on `queue`.
     private var pending: [String: PendingPermission] = [:]
+    /// Waiting background Stop hooks (reply from the pill), one per session id. Only touched on `queue`.
+    private var replies: [String: NWConnection] = [:]
+    /// A session can now (true) or can no longer (false) be replied to from the pill.
+    var onReplyAvailable: ((String, Bool) -> Void)?
+    /// Events that mean the user (or Claude) has moved on from the finished turn, so a waiting reply hook is moot.
+    private static let movedOn: Set<String> = ["UserPromptSubmit", "PreToolUse", "SessionStart", "SessionEnd"]
 
     init(port: UInt16, onEvent: @escaping (HookEvent) -> Void, snapshot: @escaping () -> Data) {
         self.port = port
@@ -59,7 +65,9 @@ final class EventServer {
         receive(conn, buffer: Data())
         // Drop connections that never finish sending (a waiting permission hook is allowed to stay).
         queue.asyncAfter(deadline: .now() + 5) { [weak self] in
-            if self?.pending.values.contains(where: { $0.conn === conn }) != true { conn.cancel() }
+            guard let self else { return }
+            let held = self.pending.values.contains { $0.conn === conn } || self.replies.values.contains { $0 === conn }
+            if !held { conn.cancel() }
         }
     }
 
@@ -88,7 +96,21 @@ final class EventServer {
                 return
             }
             send(conn, HTTPRequest.response(status: 200, reason: "OK", body: Data("ok\n".utf8)))
+            if let sid = event.sessionID, Self.movedOn.contains(event.name) { releaseReply(sid) }
             DispatchQueue.main.async { self.onEvent(event) }
+        case ("POST", "/reply"):
+            guard let sid = HookEvent(json: request.body)?.sessionID else {
+                send(conn, HTTPRequest.response(status: 200, reason: "OK", body: Data()))
+                return
+            }
+            releaseReply(sid, notify: false)  // a newer turn's hook replaces an older one
+            replies[sid] = conn
+            watchForHangup(conn) { [weak self] in
+                guard let self, self.replies[sid] === conn else { return }
+                self.replies[sid] = nil
+                DispatchQueue.main.async { self.onReplyAvailable?(sid, false) }
+            }
+            DispatchQueue.main.async { self.onReplyAvailable?(sid, true) }
         case ("POST", "/permission"):
             let pid = request.headers["x-claude-pid"].flatMap { Int32($0) }.flatMap { $0 > 1 ? $0 : nil }
             guard let event = HookEvent(json: request.body, pid: pid) else {
@@ -106,7 +128,10 @@ final class EventServer {
             raw[PermissionDecision.requestIDKey] = id
             let tagged = HookEvent(raw: raw, receivedAt: event.receivedAt, pid: event.pid)
             pending[id] = PendingPermission(conn: conn, suggestions: raw["permission_suggestions"])
-            watchForHangup(conn, id: id)
+            watchForHangup(conn) { [weak self] in
+                guard let self, self.pending.removeValue(forKey: id) != nil else { return }
+                DispatchQueue.main.async { self.onRequestGone?(id) }
+            }
             DispatchQueue.main.async { self.onEvent(tagged) }
         case ("GET", "/sessions"):
             let body = DispatchQueue.main.sync { snapshot() }
@@ -139,12 +164,28 @@ final class EventServer {
         }
     }
 
+    /// Sends text typed into the pill to the session's waiting Stop hook, which wakes Claude with it.
+    func reply(to sessionID: String, _ text: String) {
+        queue.async {
+            guard let conn = self.replies.removeValue(forKey: sessionID) else { return }
+            let message = "The user replied from Switchboard. Treat this as their next message:\n\n" + text
+            self.send(conn, HTTPRequest.response(status: 200, reason: "OK", body: Data(message.utf8)))
+        }
+    }
+
+    /// Lets a waiting reply hook finish with no reply (exit 0, nothing happens). Call on `queue`.
+    private func releaseReply(_ sessionID: String, notify: Bool = true) {
+        guard let conn = replies.removeValue(forKey: sessionID) else { return }
+        send(conn, HTTPRequest.response(status: 200, reason: "OK", body: Data()))
+        if notify { DispatchQueue.main.async { self.onReplyAvailable?(sessionID, false) } }
+    }
+
     /// A read on a held connection only completes when the client hangs up (curl killed or timed out).
-    private func watchForHangup(_ conn: NWConnection, id: String) {
-        conn.receive(minimumIncompleteLength: 1, maximumLength: 1) { [weak self] _, _, isComplete, error in
-            guard let self, isComplete || error != nil, self.pending.removeValue(forKey: id) != nil else { return }
+    private func watchForHangup(_ conn: NWConnection, onHangup: @escaping () -> Void) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, isComplete, error in
+            guard isComplete || error != nil else { return }
             conn.cancel()
-            DispatchQueue.main.async { self.onRequestGone?(id) }
+            onHangup()
         }
     }
 

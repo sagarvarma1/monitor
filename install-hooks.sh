@@ -27,6 +27,9 @@ CMD='curl -s -o /dev/null --connect-timeout 0.2 -m 0.5 -X POST -H "Content-Type:
 # PermissionRequest waits (up to ~10 min) for Allow/Deny from the pill and prints it as the hook's decision.
 # Claude Code shows its own prompt meanwhile; whichever answer comes first wins.
 PERM_CMD='curl -s --connect-timeout 0.2 -m 590 -X POST -H "Content-Type: application/json" -H "X-Claude-PID: $PPID" --data-binary @- http://127.0.0.1:'"$PORT"'/permission 2>/dev/null || true # switchboard'
+# A second Stop handler, run in the background (asyncRewake) so the turn ends normally. It waits for a reply typed
+# into the pill; if one comes it goes to stderr with exit 2, which wakes Claude with it.
+REPLY_CMD='r=$(curl -s --connect-timeout 0.2 -m 7190 -X POST -H "Content-Type: application/json" -H "X-Claude-PID: $PPID" --data-binary @- http://127.0.0.1:'"$PORT"'/reply 2>/dev/null); [ -n "$r" ] && { printf "%s\n" "$r" >&2; exit 2; }; exit 0 # switchboard'
 
 mkdir -p "$(dirname "$SETTINGS")"
 [[ -s "$SETTINGS" ]] || echo '{}' > "$SETTINGS"
@@ -38,15 +41,17 @@ cp -p "$SETTINGS" "$BACKUP"
 echo "Backed up $SETTINGS -> $BACKUP"
 
 TMP="$(mktemp)"
-jq --arg cmd "$CMD" --arg perm "$PERM_CMD" --argjson events "$EVENTS" '
+jq --arg cmd "$CMD" --arg perm "$PERM_CMD" --arg reply "$REPLY_CMD" --argjson events "$EVENTS" '
   def ours: (.command? // "") | test("# switchboard$");
   # Drop any previous Switchboard handlers (so re-running updates them), keep everything else.
   def strip: map(if any(.hooks[]?; ours) then (.hooks |= map(select(ours | not))) | select(.hooks | length > 0) else . end);
   .hooks = (.hooks // {})
   | reduce $events[] as $e (.;
-      .hooks[$e] = (((.hooks[$e] // []) | strip) + [{"hooks": [
-        if $e == "PermissionRequest" then {"type": "command", "command": $perm, "timeout": 600}
-        else {"type": "command", "command": $cmd, "timeout": 2} end]}]))
+      .hooks[$e] = (((.hooks[$e] // []) | strip) + [{"hooks": (
+        if $e == "PermissionRequest" then [{"type": "command", "command": $perm, "timeout": 600}]
+        elif $e == "Stop" then [{"type": "command", "command": $cmd, "timeout": 2},
+                                {"type": "command", "command": $reply, "timeout": 7200, "asyncRewake": true}]
+        else [{"type": "command", "command": $cmd, "timeout": 2}] end)}]))
 ' "$SETTINGS" > "$TMP"
 jq empty "$TMP"
 cat "$TMP" > "$SETTINGS"   # write in place to keep permissions and symlinks

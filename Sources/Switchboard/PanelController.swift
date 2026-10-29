@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 import SwitchboardCore
 
@@ -63,6 +64,12 @@ final class UIState: ObservableObject {
     @Published var unseenDone: Set<String> = []
     @Published var expandedID: String?
     @Published var corner = Corner.topTrailing
+    /// The session whose reply field is open. While set, the panel stays open and takes keyboard focus.
+    @Published var replyingID: String? {
+        didSet {
+            if let replyingID { pinned = true; expandedID = replyingID }
+        }
+    }
     /// While dragging, the glass shrinks to the pill so it's easy to place.
     @Published var dragging = false
     /// After a drop the pointer is still over the pill; don't expand until it leaves and comes back.
@@ -163,9 +170,11 @@ final class UIState: ObservableObject {
     }
 }
 
-/// Floating panel that never takes focus and joins every Space.
+/// Floating panel that joins every Space and only takes keyboard focus while a reply is being typed. Being a
+/// non-activating panel, even then it doesn't activate the app, so your terminal stays the frontmost app.
 final class FloatingPanel: NSPanel {
-    override var canBecomeKey: Bool { false }
+    var acceptsKeyboard = false
+    override var canBecomeKey: Bool { acceptsKeyboard }
     override var canBecomeMain: Bool { false }
 }
 
@@ -193,9 +202,11 @@ final class PanelController {
     private var pointerInside = false
     private var dragOffset: CGPoint?
     private var monitors: [Any] = []
+    private var replyObserver: AnyCancellable?
 
     init(store: SessionStore, ui: UIState, setup: Setup,
-         onFocus: @escaping (String) -> Void, onDecide: @escaping (String, PermissionDecision) -> Void) {
+         onFocus: @escaping (String) -> Void, onDecide: @escaping (String, PermissionDecision) -> Void,
+         onReply: @escaping (String, String) -> Void) {
         self.ui = ui
         panel = FloatingPanel(contentRect: NSRect(x: 0, y: 0, width: 200, height: 56),
                               styleMask: [.nonactivatingPanel, .borderless],
@@ -218,7 +229,7 @@ final class PanelController {
         }
 
         hosting = ClickThroughHostingView(rootView: PanelRoot(
-            store: store, ui: ui, setup: setup, onFocus: onFocus, onDecide: onDecide,
+            store: store, ui: ui, setup: setup, onFocus: onFocus, onDecide: onDecide, onReply: onReply,
             onSize: { [weak self] in self?.glassDidResize($0) }))
         hosting.sizingOptions = []  // the window keeps its own frame
         panel.contentView = hosting
@@ -237,10 +248,20 @@ final class PanelController {
         monitors.append(NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp]) { [weak self] event in
             self?.handleDrag(event) ?? event
         } as Any)
-        // Clicking anywhere else unpins, like dismissing a popover.
+        // Clicking anywhere else unpins (and drops a half-typed reply), like dismissing a popover.
         monitors.append(NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak ui] _ in
+            ui?.replyingID = nil
             if ui?.pinned == true { ui?.pinned = false }
         } as Any)
+        replyObserver = ui.$replyingID.removeDuplicates().sink { [weak self] id in
+            guard let self else { return }
+            self.panel.acceptsKeyboard = id != nil
+            if id != nil {
+                self.panel.makeKeyAndOrderFront(nil)
+            } else if self.panel.isKeyWindow {
+                self.panel.resignKey()
+            }
+        }
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in self?.settle() }
         settle()

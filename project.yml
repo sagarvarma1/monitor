@@ -1,0 +1,100 @@
+name: Switchboard
+options:
+  bundleIdPrefix: com.sagarvarma
+  deploymentTarget:
+    macOS: "13.0"
+    iOS: "17.2"
+  createIntermediateGroups: true
+settings:
+  base:
+    DEVELOPMENT_TEAM: 2NM47V54SX
+    CODE_SIGN_STYLE: Automatic
+    SWIFT_VERSION: "5.9"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "2"
+packages:
+  SwitchboardCore:
+    path: .
+targets:
+  # Mac app: the pill, the hook server, and the iCloud/APNs bridge to the phone.
+  Switchboard:
+    type: application
+    platform: macOS
+    sources: [Sources/Switchboard, CloudShared]
+    dependencies:
+      - package: SwitchboardCore
+      - sdk: Carbon.framework
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Switchboard
+        LSUIElement: true
+        NSHighResolutionCapable: true
+        NSAppleEventsUsageDescription: Switchboard uses Apple Events to bring the Terminal or iTerm2 tab running a Claude Code session to the front.
+        SBTeamID: $(DEVELOPMENT_TEAM)
+    entitlements:
+      path: Resources/Switchboard.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers: [iCloud.com.sagarvarma.switchboard]
+        com.apple.developer.icloud-services: [CloudKit]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sagarvarma.switchboard
+        PRODUCT_NAME: Switchboard
+        ENABLE_HARDENED_RUNTIME: NO
+  # iPhone app: session list, Allow/Deny/Reply, and the Live Activity's push tokens.
+  SwitchboardMobile:
+    type: application
+    platform: iOS
+    sources: [Mobile, Shared, CloudShared]
+    dependencies:
+      - package: SwitchboardCore
+      - target: SwitchboardLive
+    info:
+      path: Mobile/Info.plist
+      properties:
+        CFBundleDisplayName: Switchboard
+        UILaunchScreen: {}
+        NSSupportsLiveActivities: true
+        NSSupportsLiveActivitiesFrequentUpdates: true
+        UIBackgroundModes: [remote-notification]
+        CFBundleURLTypes:
+          - CFBundleURLSchemes: [switchboard]
+        SBAPNSEnvironment: development
+    entitlements:
+      path: Mobile/SwitchboardMobile.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers: [iCloud.com.sagarvarma.switchboard]
+        com.apple.developer.icloud-services: [CloudKit]
+        aps-environment: development
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sagarvarma.switchboard.mobile
+        PRODUCT_NAME: Switchboard
+        TARGETED_DEVICE_FAMILY: "1"
+        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+  # Live Activity (Dynamic Island + Lock Screen).
+  SwitchboardLive:
+    type: app-extension
+    platform: iOS
+    sources: [LiveActivity, Shared, CloudShared]
+    dependencies:
+      - package: SwitchboardCore
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
+    info:
+      path: LiveActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Switchboard
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: LiveActivity/SwitchboardLive.entitlements
+      properties:
+        com.apple.developer.icloud-container-identifiers: [iCloud.com.sagarvarma.switchboard]
+        com.apple.developer.icloud-services: [CloudKit]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sagarvarma.switchboard.mobile.live
+        PRODUCT_NAME: SwitchboardLive
+        TARGETED_DEVICE_FAMILY: "1"

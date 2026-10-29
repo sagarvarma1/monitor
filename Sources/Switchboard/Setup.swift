@@ -7,6 +7,8 @@ import SwitchboardCore
 final class Setup: ObservableObject {
     @Published private(set) var hooks: HookInstaller.Status = .notInstalled
     @Published private(set) var loginItem: SMAppService.Status = .notRegistered
+    /// One line about the iPhone link, shown in the ⋯ menu (set by PhoneBridge).
+    @Published var phoneStatus: String?
     /// Set when we just installed hooks. Current Claude Code picks them up live; older versions need a restart.
     @Published var restartHint = false
 

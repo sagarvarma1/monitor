@@ -17,7 +17,7 @@ public enum HookInstaller {
     public static let marker = "# switchboard"
 
     public static var defaultSettingsURL: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".claude/settings.json")
+        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
     }
 
     /// Byte-for-byte the commands install-hooks.sh writes, so the script and the app recognise each other's entries.
@@ -37,32 +37,60 @@ public enum HookInstaller {
 
     public static let permissionTimeout = 600
 
-    static func handler(event: String, port: Int) -> [String: Any] {
-        event == "PermissionRequest"
-            ? ["type": "command", "command": permissionCommand(port: port), "timeout": permissionTimeout]
-            : ["type": "command", "command": command(port: port), "timeout": 2]
+    /// A second Stop handler that runs in the background (`asyncRewake`), so the turn ends normally. It waits for a
+    /// reply typed into the pill; if one comes, it prints it to stderr and exits 2, which wakes Claude with it.
+    /// Typing in the terminal instead makes the app release it with an empty reply (exit 0, nothing happens).
+    public static func replyCommand(port: Int) -> String {
+        "r=$(curl -s --connect-timeout 0.2 -m \(replyTimeout - 10) -X POST -H \"Content-Type: application/json\" "
+            + "-H \"X-Claude-PID: $PPID\" --data-binary @- http://127.0.0.1:\(port)/reply 2>/dev/null); "
+            + "[ -n \"$r\" ] && { printf \"%s\\n\" \"$r\" >&2; exit 2; }; exit 0 \(marker)"
+    }
+
+    /// How long after a turn ends you can still reply from the pill.
+    public static let replyTimeout = 7200
+
+    static func handlers(event: String, port: Int) -> [[String: Any]] {
+        switch event {
+        case "PermissionRequest":
+            return [["type": "command", "command": permissionCommand(port: port), "timeout": permissionTimeout]]
+        case "Stop":
+            return [["type": "command", "command": command(port: port), "timeout": 2],
+                    ["type": "command", "command": replyCommand(port: port), "timeout": replyTimeout, "asyncRewake": true]]
+        default:
+            return [["type": "command", "command": command(port: port), "timeout": 2]]
+        }
+    }
+
+    private static func expectedCommands(port: Int) -> [String: Set<String>] {
+        Dictionary(uniqueKeysWithValues: events.map { event in
+            (event, Set(handlers(event: event, port: port).compactMap { $0["command"] as? String }))
+        })
     }
 
     // MARK: Pure transforms
 
     public static func status(of settings: [String: Any], port: Int) -> Status {
         let hooks = settings["hooks"] as? [String: Any] ?? [:]
-        var found = 0, matching = 0
+        let expected = expectedCommands(port: port)
+        var found: [String: [String]] = [:]
         for (event, value) in hooks {
-            for command in ourCommands(in: value) {
-                found += 1
-                if events.contains(event) && command == handler(event: event, port: port)["command"] as? String { matching += 1 }
-            }
+            let ours = ourCommands(in: value)
+            if !ours.isEmpty { found[event] = ours }
         }
-        if found == 0 { return .notInstalled }
-        return found == events.count && matching == events.count ? .installed : .outdated
+        if found.isEmpty { return .notInstalled }
+        // Exactly the expected commands per event, each once: anything else is a previous version or a mangled copy.
+        let exact = found.count == expected.count && expected.allSatisfy { event, commands in
+            let have = found[event] ?? []
+            return have.count == commands.count && Set(have) == commands
+        }
+        return exact ? .installed : .outdated
     }
 
     public static func installing(into settings: [String: Any], port: Int) -> [String: Any] {
         var settings = removing(from: settings)
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         for event in events {
-            hooks[event] = (hooks[event] as? [Any] ?? []) + [["hooks": [handler(event: event, port: port)]]]
+            hooks[event] = (hooks[event] as? [Any] ?? []) + [["hooks": handlers(event: event, port: port)]]
         }
         settings["hooks"] = hooks
         return settings
