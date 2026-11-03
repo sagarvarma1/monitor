@@ -137,6 +137,46 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(parts.map(\.seconds), [1800, 1800])
     }
 
+    /// The hang shipped by assuming 24-hour days: on a 25-hour day, midnight + 86,400s is 23:00 the same day.
+    func testSplitByDayAcrossClockChanges() {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "America/Los_Angeles")!
+        let iso = ISO8601DateFormatter()
+
+        // Clocks go back on 2026-11-01: 23:30 PST that night to 00:30 PST on the 2nd.
+        let fallBack = IdleMath.splitByDay(DateInterval(start: iso.date(from: "2026-11-02T07:30:00Z")!, duration: 3600), calendar: cal)
+        XCTAssertEqual(fallBack.map(\.day), ["2026-11-01", "2026-11-02"])
+        XCTAssertEqual(fallBack.map(\.seconds), [1800, 1800])
+
+        // Clocks go forward on 2027-03-14 (a 23-hour day): 23:30 PDT that night to 00:30 PDT on the 15th.
+        let forward = IdleMath.splitByDay(DateInterval(start: iso.date(from: "2027-03-15T06:30:00Z")!, duration: 3600), calendar: cal)
+        XCTAssertEqual(forward.map(\.day), ["2027-03-14", "2027-03-15"])
+        XCTAssertEqual(forward.map(\.seconds), [1800, 1800])
+
+        // A wait spanning the whole 25-hour day is counted once per day and loses no time.
+        let span = DateInterval(start: iso.date(from: "2026-10-31T12:00:00Z")!, end: iso.date(from: "2026-11-03T12:00:00Z")!)
+        let parts = IdleMath.splitByDay(span, calendar: cal)
+        XCTAssertEqual(parts.map(\.day), ["2026-10-31", "2026-11-01", "2026-11-02", "2026-11-03"])
+        XCTAssertEqual(parts.map(\.seconds).reduce(0, +), span.duration)
+    }
+
+    func testChatMessageListsImages() {
+        XCTAssertEqual(ChatMessage.compose(text: "hi", imagePaths: []), "hi")
+        XCTAssertEqual(ChatMessage.compose(text: "see this", imagePaths: ["/a.png"]),
+                       "see this\n\nThe user attached an image. Open with the Read tool:\n- /a.png")
+        XCTAssertTrue(ChatMessage.compose(text: "", imagePaths: ["/a.png", "/b.png"]).hasPrefix("The user attached 2 images."))
+    }
+
+    func testOnlyLocalToolsMayTalkToTheServer() {
+        func request(_ headers: [String: String]) -> HTTPRequest { HTTPRequest(method: "POST", path: "/event", headers: headers, body: Data()) }
+        XCTAssertTrue(request(["host": "127.0.0.1:7777"]).isFromLocalTool(port: 7777))
+        XCTAssertTrue(request(["host": "localhost:7777"]).isFromLocalTool(port: 7777))
+        XCTAssertFalse(request(["host": "127.0.0.1:7777", "origin": "https://evil.example"]).isFromLocalTool(port: 7777))
+        XCTAssertFalse(request(["host": "127.0.0.1:7777", "sec-fetch-site": "cross-site"]).isFromLocalTool(port: 7777))
+        XCTAssertFalse(request(["host": "evil.example:7777"]).isFromLocalTool(port: 7777), "DNS rebinding")
+        XCTAssertFalse(request([:]).isFromLocalTool(port: 7777))
+    }
+
     func testHTTPParse() {
         let body = #"{"session_id":"a"}"#
         let raw = "POST /event HTTP/1.1\r\nHost: x\r\nContent-Length: \(body.utf8.count)\r\nX-Claude-PID: 42\r\n\r\n\(body)"

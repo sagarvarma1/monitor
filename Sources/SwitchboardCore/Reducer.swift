@@ -37,6 +37,7 @@ public enum Reducer {
         s.lastEventAt = now
         s.lastEvent = e.name
         if let pid = e.pid { s.pid = pid }
+        if let path = e.string("transcript_path"), path.hasSuffix(".jsonl") { s.transcriptPath = path }
 
         switch e.name {
         case "SessionStart":

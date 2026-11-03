@@ -31,6 +31,8 @@ public struct Session: Equatable, Codable, Identifiable, Sendable {
     public var pendingPermissions: [String]
     /// Set while a PermissionRequest hook is waiting on Switchboard for an answer (Allow/Deny from the pill).
     public var decisionID: String?
+    /// The session's transcript (JSONL), from the hook payload. Feeds the dashboard's activity feed.
+    public var transcriptPath: String?
 
     public init(id: String, cwd: String, branch: String? = nil, status: SessionStatus = .working,
                 need: String = "", detail: String = "", waitingSince: Date? = nil,
@@ -54,6 +56,11 @@ public struct Session: Equatable, Codable, Identifiable, Sendable {
     public var name: String {
         let base = (cwd as NSString).lastPathComponent
         return base.isEmpty ? cwd : base
+    }
+
+    /// The hook's transcript path, or where Claude Code keeps it by default.
+    public var transcriptFile: String {
+        transcriptPath ?? TranscriptReader.defaultPath(cwd: cwd, sessionID: id)
     }
 
     public var displayName: String {

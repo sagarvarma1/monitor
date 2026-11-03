@@ -12,7 +12,13 @@ public enum IdleMath {
         var out: [(String, TimeInterval)] = []
         var cursor = interval.start
         while cursor < interval.end {
-            let nextMidnight = calendar.startOfDay(for: cursor).addingTimeInterval(86_400)
+            // Calendar arithmetic, not +86,400s: days are 23 or 25 hours long when the clocks change, and a fixed
+            // offset can land before the cursor's own day ends, which would stop the cursor advancing.
+            let start = calendar.startOfDay(for: cursor)
+            guard let nextMidnight = calendar.date(byAdding: .day, value: 1, to: start), nextMidnight > cursor else {
+                out.append((dayKey(cursor, calendar: calendar), interval.end.timeIntervalSince(cursor)))
+                break
+            }
             let end = min(nextMidnight, interval.end)
             out.append((dayKey(cursor, calendar: calendar), end.timeIntervalSince(cursor)))
             cursor = end
@@ -31,6 +37,29 @@ public enum IdleMath {
         if s < 60 { return "\(s)s" }
         if s < 3600 { return "\(s / 60)m \(String(format: "%02d", s % 60))s" }
         return "\(s / 3600)h \(String(format: "%02d", (s % 3600) / 60))m"
+    }
+}
+
+public enum ChatMessage {
+    /// Starts what the reply hook wakes Claude with; the transcript records that wrapped in tags.
+    public static let replyPrefix = "The user replied from Switchboard. Treat this as their next message:\n\n"
+
+    /// The message inside a transcript entry that a Switchboard reply woke Claude with, if this is one.
+    public static func reply(inTranscriptText text: String) -> String? {
+        guard let start = text.range(of: replyPrefix) else { return nil }
+        var body = text[start.upperBound...]
+        for tag in ["&lt;/system-reminder&gt;", "</system-reminder>"] {
+            if let end = body.range(of: tag) { body = body[..<end.lowerBound] }
+        }
+        return body.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// What Claude receives for a message with images: hooks only carry text, so it opens them by path.
+    public static func compose(text: String, imagePaths: [String]) -> String {
+        guard !imagePaths.isEmpty else { return text }
+        let list = imagePaths.map { "- \($0)" }.joined(separator: "\n")
+        let note = "The user attached \(imagePaths.count == 1 ? "an image" : "\(imagePaths.count) images"). Open with the Read tool:\n\(list)"
+        return text.isEmpty ? note : "\(text)\n\n\(note)"
     }
 }
 
