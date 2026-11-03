@@ -3,3 +3,4 @@ build/
 *.xcodeproj/xcuserdata/
 .swiftpm/
 *.xcodeproj/
+dist/
