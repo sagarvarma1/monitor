@@ -13,6 +13,10 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
             ? UNUserNotificationCenter.current() : nil
         super.init()
         center?.delegate = self
+    }
+
+    /// Separate from init: the system prompt shouldn't appear before the welcome screen has been answered.
+    func requestPermission() {
         center?.requestAuthorization(options: [.alert, .sound]) { granted, error in
             if let error { NSLog("Switchboard: notification auth error: %@", error.localizedDescription) }
             if !granted { NSLog("Switchboard: notifications not allowed") }
@@ -35,7 +39,7 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
         guard let center else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(session.displayName) is done"
-        content.body = Summarizer.oneLine(session.detail.isEmpty ? "Ready for review" : session.detail, max: 140)
+        content.body = Summarizer.oneLine(session.detail.isEmpty ? "Ready for review" : Summarizer.plainText(session.detail), max: 140)
         content.userInfo = ["session_id": session.id]
         // Same id per session, so a chatty session replaces its banner instead of stacking them.
         center.add(UNNotificationRequest(identifier: "done-\(session.id)", content: content, trigger: nil))

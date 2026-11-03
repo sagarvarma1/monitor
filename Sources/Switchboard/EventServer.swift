@@ -88,6 +88,10 @@ final class EventServer {
     }
 
     private func respond(_ conn: NWConnection, to request: HTTPRequest) {
+        guard request.isFromLocalTool(port: Int(port)) else {
+            send(conn, HTTPRequest.response(status: 403, reason: "Forbidden", body: Data("forbidden\n".utf8)))
+            return
+        }
         switch (request.method, request.path) {
         case ("POST", "/event"):
             let pid = request.headers["x-claude-pid"].flatMap { Int32($0) }.flatMap { $0 > 1 ? $0 : nil }
@@ -168,7 +172,7 @@ final class EventServer {
     func reply(to sessionID: String, _ text: String) {
         queue.async {
             guard let conn = self.replies.removeValue(forKey: sessionID) else { return }
-            let message = "The user replied from Switchboard. Treat this as their next message:\n\n" + text
+            let message = ChatMessage.replyPrefix + text
             self.send(conn, HTTPRequest.response(status: 200, reason: "OK", body: Data(message.utf8)))
         }
     }

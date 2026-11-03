@@ -77,6 +77,10 @@ final class UIState: ObservableObject {
     /// Room the glass has to grow into from its corner, so a long list scrolls instead of running off screen.
     @Published var maxHeight: CGFloat = 600
 
+    /// Opens the dashboard (on a session, if given) and the settings window; set by the app delegate.
+    var openDashboard: ((String?) -> Void)?
+    var openSettings: (() -> Void)?
+
     private var hoverWork: DispatchWorkItem?
     private var peekWork: DispatchWorkItem?
     private var doneWork: DispatchWorkItem?
@@ -333,6 +337,13 @@ final class PanelController {
         let x = corner.isTrailing ? a.x + m - width : a.x - m
         let y = corner.isTop ? a.y + m - canvasHeight : a.y - m
         panel.setFrame(NSRect(x: x, y: y, width: width, height: canvasHeight), display: true)
+    }
+
+    /// Back to the default spot, top right.
+    func resetPosition() {
+        anchor = nil
+        UserDefaults.standard.removeObject(forKey: Self.anchorKey)
+        settle()
     }
 
     // MARK: Dragging

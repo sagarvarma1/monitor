@@ -8,6 +8,8 @@ final class SessionStore: ObservableObject {
     /// Sessions with a finished turn whose background Stop hook is waiting for a reply from the pill.
     /// Not persisted: the waiting hooks don't survive a restart.
     @Published private(set) var replyable: Set<String> = []
+    /// Messages from the dashboard waiting for the session's turn to end, by session id.
+    @Published private(set) var queued: [String: String] = [:]
     var onBecameBlocked: ((Session) -> Void)?
     /// Sends an Allow/Deny to the waiting hook with this request id.
     var onDecide: ((String, PermissionDecision) -> Void)?
@@ -105,6 +107,22 @@ final class SessionStore: ObservableObject {
         guard replyable.contains(sessionID) != available else { return }
         if available { replyable.insert(sessionID) } else { replyable.remove(sessionID) }
         onUpdate?()
+        if available, let message = queued.removeValue(forKey: sessionID) { reply(sessionID, message) }
+    }
+
+    /// Sends now if the session can take a message, otherwise as soon as its turn ends.
+    func send(_ sessionID: String, _ text: String) {
+        if replyable.contains(sessionID) {
+            reply(sessionID, text)
+        } else if let earlier = queued[sessionID] {
+            queued[sessionID] = earlier + "\n\n" + text
+        } else {
+            queued[sessionID] = text
+        }
+    }
+
+    func cancelQueued(_ sessionID: String) {
+        queued[sessionID] = nil
     }
 
     /// Wakes a finished session with a follow-up typed into the pill. Like `decide`, the UI moves on right away and

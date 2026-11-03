@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import SwitchboardCore
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -9,7 +10,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKey: HotKey?
     private var notifier: Notifier!
     private var setup: Setup!
-    private var phone: PhoneBridge!
+    private var windows: AppWindows!
+    private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // A second copy (e.g. login item plus a manual launch) would lose the port race; leave the first one running.
@@ -52,7 +54,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.ui.endPeek()
             }
             self.ui.pruneDone(keeping: Set(self.store.sessions.filter { $0.status == .review }.map(\.id)))
-            self.phone?.storeChanged()
         }
         notifier.onClick = { [weak self] id in
             self?.panel.show()
@@ -75,16 +76,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.notifier.notify(title: "Switchboard is connected to Claude Code",
                                   body: "Your sessions will appear as soon as they do something.")
         }
-        // Skip the real settings.json and iCloud when running against a scratch database (tests, demos).
-        phone = PhoneBridge(store: store, setup: setup)
-        if ProcessInfo.processInfo.environment["SWITCHBOARD_DB"] == nil {
-            setup.start()
-            phone.start()
+        windows = AppWindows(
+            dashboard: { [unowned self] in
+                AnyView(DashboardView(store: store, nav: windows.nav, onFocus: { [weak self] in self?.focus($0) }))
+            },
+            settings: { [unowned self] in
+                AnyView(SettingsView(setup: setup, onResetPill: { [weak self] in self?.panel.resetPosition() }))
+            })
+        ui.openDashboard = { [weak self] id in self?.windows.showDashboard(selecting: id) }
+        ui.openSettings = { [weak self] in self?.windows.showSettings() }
+
+        setup.onReady = { [weak self] in self?.notifier.requestPermission() }
+        setup.onNeedsConsent = { [weak self] in
+            guard let self else { return }
+            self.windows.showWelcome(AnyView(WelcomeView { [weak self] connect, launchAtLogin in
+                self?.windows.closeWelcome()
+                self?.setup.finishWelcome(connect: connect, launchAtLogin: launchAtLogin)
+            }))
         }
+        // Skip the real settings.json when running against a scratch database (tests, demos).
+        if ProcessInfo.processInfo.environment["SWITCHBOARD_DB"] == nil { setup.start() }
 
         hotKey = HotKey { [weak self] in self?.panel.toggle() }
         panel.show()
+        installStatusItem()
+        Watchdog.start()
     }
+
+    /// Always reachable, including while the pill is hidden with ⌥S.
+    private func installStatusItem() {
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        item.button?.image = NSImage(systemSymbolName: "capsule.fill", accessibilityDescription: "Switchboard")
+        let menu = NSMenu()
+        for (title, action, key) in [("Show or Hide Pill", #selector(togglePill), ""),
+                                     ("Open Dashboard", #selector(openDashboard), ""),
+                                     ("Settings…", #selector(openSettings), ",")] {
+            menu.addItem(withTitle: title, action: action, keyEquivalent: key).target = self
+        }
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Switchboard", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func togglePill() { panel.toggle() }
+    @objc private func openDashboard() { windows.showDashboard(selecting: nil) }
+    @objc private func openSettings() { windows.showSettings() }
 
     /// Settings saved under the app's previous bundle id (pill position, toggles) carry over once.
     private static func migrateDefaults() {

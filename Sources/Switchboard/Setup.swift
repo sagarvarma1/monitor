@@ -2,19 +2,21 @@ import AppKit
 import ServiceManagement
 import SwitchboardCore
 
-/// Everything that used to be manual: hooks in ~/.claude/settings.json and launch at login.
-/// Both are turned on automatically once; if you turn either off, it stays off.
+/// Hooks in ~/.claude/settings.json and launch at login. Nothing changes until the welcome screen is answered;
+/// after that, if you turn either off, it stays off.
 final class Setup: ObservableObject {
     @Published private(set) var hooks: HookInstaller.Status = .notInstalled
     @Published private(set) var loginItem: SMAppService.Status = .notRegistered
-    /// One line about the iPhone link, shown in the ⋯ menu (set by PhoneBridge).
-    @Published var phoneStatus: String?
     /// Set when we just installed hooks. Current Claude Code picks them up live; older versions need a restart.
     @Published var restartHint = false
 
     var onHooksInstalled: (() -> Void)?
+    /// First launch: nothing has been touched yet, and the welcome screen should ask.
+    var onNeedsConsent: (() -> Void)?
+    /// Setup has been agreed to (now, or on an earlier launch).
+    var onReady: (() -> Void)?
 
-    private let port: Int
+    let port: Int
     private let defaults = UserDefaults.standard
     private var timer: Timer?
 
@@ -30,6 +32,7 @@ final class Setup: ObservableObject {
         static let bannerOnDone = "bannerOnDone"
         static let hooksOff = "hooksDisabledByUser"
         static let loginConfigured = "loginItemConfigured"
+        static let consented = "setupConsented"
     }
 
     init(port: Int) {
@@ -37,22 +40,36 @@ final class Setup: ObservableObject {
     }
 
     func start() {
-        if isBundled && !defaults.bool(forKey: Key.loginConfigured) {
-            defaults.set(true, forKey: Key.loginConfigured)
-            setLaunchAtLogin(true)
-        }
+        // Copies from before the welcome screen existed have already been set up.
+        if defaults.bool(forKey: Key.loginConfigured) { defaults.set(true, forKey: Key.consented) }
         refreshLoginItem()
-        ensureHooks()
+        hooks = HookInstaller.status(port: port)
         // Self-heal: Claude Code can rewrite settings.json from a stale snapshot and drop our entries.
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.ensureHooks()
             self?.refreshLoginItem()
         }
+        if defaults.bool(forKey: Key.consented) {
+            ensureHooks()
+            onReady?()
+        } else {
+            onNeedsConsent?()
+        }
+    }
+
+    /// The welcome screen's answer. Closing the window instead changes nothing, and it asks again next launch.
+    func finishWelcome(connect: Bool, launchAtLogin: Bool) {
+        defaults.set(true, forKey: Key.consented)
+        defaults.set(true, forKey: Key.loginConfigured)
+        defaults.set(!connect, forKey: Key.hooksOff)
+        if launchAtLogin { setLaunchAtLogin(true) }
+        ensureHooks()
+        onReady?()
     }
 
     // MARK: Hooks
 
-    var hooksEnabled: Bool { !defaults.bool(forKey: Key.hooksOff) }
+    var hooksEnabled: Bool { defaults.bool(forKey: Key.consented) && !defaults.bool(forKey: Key.hooksOff) }
 
     func ensureHooks() {
         hooks = HookInstaller.status(port: port)
@@ -69,6 +86,7 @@ final class Setup: ObservableObject {
     }
 
     func setHooksEnabled(_ on: Bool) {
+        defaults.set(true, forKey: Key.consented)
         defaults.set(!on, forKey: Key.hooksOff)
         if on {
             ensureHooks()

@@ -407,6 +407,7 @@ struct ExpandedPanel: View {
                            onTap: { toggle(session.id) },
                            onFocus: { onFocus(session.id) },
                            onDismiss: { store.dismiss(session.id) },
+                           onDetails: { ui.pinned = false; ui.openDashboard?(session.id) },
                            onDecide: { onDecide(session.id, $0) },
                            reply: store.replyable.contains(session.id)
                                ? ReplyState(open: ui.replyingID == session.id,
@@ -435,22 +436,17 @@ struct ExpandedPanel: View {
             }
             .buttonStyle(.borderless)
             .help(ui.pinned ? "Unpin (collapses when the pointer leaves)" : "Keep open")
+            Button {
+                ui.pinned = false
+                ui.openDashboard?(nil)
+            } label: {
+                Image(systemName: "rectangle.split.2x1")
+            }
+            .buttonStyle(.borderless)
+            .help("Open the dashboard")
             Menu {
-                Toggle("Connect to Claude Code", isOn: Binding(get: { setup.hooksEnabled && setup.hooks == .installed },
-                                                               set: { setup.setHooksEnabled($0) }))
-                Toggle("Banner When a Session Finishes", isOn: $setup.bannerOnDone)
-                if let phone = setup.phoneStatus {
-                    Divider()
-                    Text(phone)
-                    Button("Open APNs Key Folder") {
-                        try? FileManager.default.createDirectory(at: PhoneBridge.keyDirectory, withIntermediateDirectories: true)
-                        NSWorkspace.shared.open(PhoneBridge.keyDirectory)
-                    }
-                }
-                if setup.isBundled {
-                    Toggle("Open at Login", isOn: Binding(get: { setup.launchesAtLogin },
-                                                          set: { setup.setLaunchAtLogin($0) }))
-                }
+                Button("Open Dashboard") { ui.pinned = false; ui.openDashboard?(nil) }
+                Button("Settings…") { ui.pinned = false; ui.openSettings?() }
                 Divider()
                 Button("Quit Switchboard") { NSApp.terminate(nil) }
             } label: {
@@ -543,6 +539,7 @@ struct SessionRow: View {
     var onTap: () -> Void
     var onFocus: () -> Void
     var onDismiss: () -> Void
+    var onDetails: () -> Void
     var onDecide: (PermissionDecision) -> Void
     /// Set when this finished session can take a reply from the pill.
     var reply: ReplyState?
@@ -606,12 +603,17 @@ struct SessionRow: View {
         VStack(alignment: .leading, spacing: 6) {
             if !session.detail.isEmpty {
                 ScrollView {
-                    Text(session.detail)
-                        .font(.system(size: 11, design: session.detail.hasPrefix("{") || session.detail.contains("\n  \"") ? .monospaced : .default))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Group {
+                        if session.detail.hasPrefix("{") || session.detail.contains("\n  \"") {
+                            Text(session.detail).font(.system(size: 11, design: .monospaced))  // a tool call's JSON input
+                        } else {
+                            MarkdownText(source: session.detail)  // Claude's reply
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
                 }
-                .frame(maxHeight: 160)
+                .frame(maxHeight: 200)
                 .fixedSize(horizontal: false, vertical: true)
             }
             Text(session.cwd)
@@ -622,6 +624,9 @@ struct SessionRow: View {
             HStack {
                 Button("Go to session", action: onFocus)
                     .controlSize(.small)
+                Button("Details", action: onDetails)
+                    .controlSize(.small)
+                    .help("Activity, tasks and files in the dashboard")
                 Spacer()
                 Button("Dismiss", action: onDismiss)
                     .controlSize(.small)
@@ -680,6 +685,8 @@ struct ReplyState {
 struct ReplyField: View {
     var onSend: (String) -> Void
     var onCancel: () -> Void
+    /// The pill wants the cursor in it right away; the dashboard shouldn't grab focus just by showing a session.
+    var autofocus = true
     @State private var text = ""
     @FocusState private var focused: Bool
 
@@ -708,12 +715,63 @@ struct ReplyField: View {
         }
         .onAppear {
             // The panel becomes key a beat after the field appears.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true }
+            if autofocus { DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focused = true } }
         }
     }
 
     private func send() {
         guard !trimmed.isEmpty else { return }
         onSend(trimmed)
+    }
+}
+
+/// Claude's replies are Markdown: headings, (nested) lists, code blocks and inline styling, laid out compactly
+/// for the panel's 11pt text.
+struct MarkdownText: View {
+    let source: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(Array(MarkdownBlock.parse(source).enumerated()), id: \.offset) { _, block in
+                view(for: block)
+            }
+        }
+        .font(.system(size: 11))
+        .textSelection(.enabled)
+    }
+
+    @ViewBuilder
+    private func view(for block: MarkdownBlock) -> some View {
+        switch block {
+        case .heading(let level, let text):
+            Text(inline(text))
+                .font(.system(size: level <= 2 ? 12.5 : 11.5, weight: .semibold))
+                .padding(.top, 3)
+        case .listItem(let depth, let marker, let text):
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(marker)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .frame(minWidth: marker == "•" ? 8 : 14, alignment: .trailing)
+                Text(inline(text)).fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.leading, CGFloat(depth) * 14)
+        case .code(let text):
+            Text(text)
+                .font(.system(size: 10.5, design: .monospaced))
+                .padding(.horizontal, 7).padding(.vertical, 5)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.07)))
+        case .rule:
+            Divider().opacity(0.5).padding(.vertical, 2)
+        case .paragraph(let text):
+            Text(inline(text)).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Bold, italic, `code` and links; falls back to the raw text if it doesn't parse.
+    private func inline(_ text: String) -> AttributedString {
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
     }
 }
