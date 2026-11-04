@@ -341,6 +341,7 @@ struct PeekView: View {
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
                 if session.decisionID != nil {
+                    ApprovalDetail(text: session.detail).padding(.top, 2)
                     DecisionButtons(onDecide: onDecide).padding(.top, 4)
                 } else {
                     Text("Click to open")
@@ -574,6 +575,7 @@ struct SessionRow: View {
                 }
             }
             if session.decisionID != nil {
+                ApprovalDetail(text: session.detail).padding(.leading, 16)
                 DecisionButtons(onDecide: onDecide).padding(.leading, 16)
             }
             if expanded { details }
@@ -639,6 +641,24 @@ struct SessionRow: View {
 
 /// Answers a waiting permission prompt. Claude Code's own prompt stays up in the terminal meanwhile;
 /// whichever answer comes first wins.
+/// The whole request, next to Allow: a one-line summary could hide the part of a command that matters.
+struct ApprovalDetail: View {
+    let text: String
+
+    var body: some View {
+        ScrollView {
+            Text(text)
+                .font(.system(size: 10.5, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(6)
+        }
+        .frame(maxHeight: 120)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+}
+
 struct DecisionButtons: View {
     var onDecide: (PermissionDecision) -> Void
 
@@ -769,9 +789,16 @@ struct MarkdownText: View {
         }
     }
 
-    /// Bold, italic, `code` and links; falls back to the raw text if it doesn't parse.
+    /// Bold, italic, `code` and links; falls back to the raw text if it doesn't parse. Only web links stay
+    /// clickable: a file: or app-scheme link in a reply could open or run something.
     private func inline(_ text: String) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        return (try? AttributedString(markdown: text, options: options)) ?? AttributedString(text)
+        guard var styled = try? AttributedString(markdown: text, options: options) else { return AttributedString(text) }
+        for run in styled.runs {
+            if let link = run.link, !["http", "https"].contains(link.scheme?.lowercased() ?? "") {
+                styled[run.range].link = nil
+            }
+        }
+        return styled
     }
 }

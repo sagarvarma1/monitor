@@ -167,16 +167,6 @@ final class SupportTests: XCTestCase {
         XCTAssertTrue(ChatMessage.compose(text: "", imagePaths: ["/a.png", "/b.png"]).hasPrefix("The user attached 2 images."))
     }
 
-    func testOnlyLocalToolsMayTalkToTheServer() {
-        func request(_ headers: [String: String]) -> HTTPRequest { HTTPRequest(method: "POST", path: "/event", headers: headers, body: Data()) }
-        XCTAssertTrue(request(["host": "127.0.0.1:7777"]).isFromLocalTool(port: 7777))
-        XCTAssertTrue(request(["host": "localhost:7777"]).isFromLocalTool(port: 7777))
-        XCTAssertFalse(request(["host": "127.0.0.1:7777", "origin": "https://evil.example"]).isFromLocalTool(port: 7777))
-        XCTAssertFalse(request(["host": "127.0.0.1:7777", "sec-fetch-site": "cross-site"]).isFromLocalTool(port: 7777))
-        XCTAssertFalse(request(["host": "evil.example:7777"]).isFromLocalTool(port: 7777), "DNS rebinding")
-        XCTAssertFalse(request([:]).isFromLocalTool(port: 7777))
-    }
-
     func testHTTPParse() {
         let body = #"{"session_id":"a"}"#
         let raw = "POST /event HTTP/1.1\r\nHost: x\r\nContent-Length: \(body.utf8.count)\r\nX-Claude-PID: 42\r\n\r\n\(body)"

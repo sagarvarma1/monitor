@@ -5,7 +5,7 @@ import Foundation
 public enum HookInstaller {
     public enum Status: Equatable {
         case installed
-        /// Some of our entries exist but don't match this version (different port or event list).
+        /// Some of our entries exist but don't match this version (different socket or event list).
         case outdated
         case notInstalled
         case invalidSettings(String)
@@ -16,23 +16,30 @@ public enum HookInstaller {
                                 "PostToolUseFailure", "Notification", "Stop", "StopFailure", "SessionEnd"]
     public static let marker = "# switchboard"
 
+    /// Where the app listens, and how the hook commands name it (expanded by the hook's shell, so the commands are
+    /// the same for everyone).
+    public static var defaultSocketPath: String {
+        NSHomeDirectory() + "/Library/Application Support/Switchboard/hook.sock"
+    }
+    public static let defaultSocketArgument = #""$HOME/Library/Application Support/Switchboard/hook.sock""#
+
     public static var defaultSettingsURL: URL {
         URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".claude/settings.json")
     }
 
     /// Byte-for-byte the commands install-hooks.sh writes, so the script and the app recognise each other's entries.
     /// Fire-and-forget: a 0.5s cap, so a closed or hung app never slows Claude Code down.
-    public static func command(port: Int) -> String {
+    public static func command(socket: String = defaultSocketArgument) -> String {
         "curl -s -o /dev/null --connect-timeout 0.2 -m 0.5 -X POST -H \"Content-Type: application/json\" "
-            + "-H \"X-Claude-PID: $PPID\" --data-binary @- http://127.0.0.1:\(port)/event >/dev/null 2>&1 || true \(marker)"
+            + "-H \"X-Claude-PID: $PPID\" --data-binary @- --unix-socket \(socket) http://localhost/event >/dev/null 2>&1 || true \(marker)"
     }
 
     /// PermissionRequest waits for an Allow/Deny from the pill and prints it as the hook's decision. Claude Code shows
     /// its own prompt meanwhile, and whichever answer comes first wins. If the app isn't running, curl fails at once
     /// and prints nothing, which leaves the normal prompt in charge.
-    public static func permissionCommand(port: Int) -> String {
+    public static func permissionCommand(socket: String = defaultSocketArgument) -> String {
         "curl -s --connect-timeout 0.2 -m \(permissionTimeout - 10) -X POST -H \"Content-Type: application/json\" "
-            + "-H \"X-Claude-PID: $PPID\" --data-binary @- http://127.0.0.1:\(port)/permission 2>/dev/null || true \(marker)"
+            + "-H \"X-Claude-PID: $PPID\" --data-binary @- --unix-socket \(socket) http://localhost/permission 2>/dev/null || true \(marker)"
     }
 
     public static let permissionTimeout = 600
@@ -40,38 +47,38 @@ public enum HookInstaller {
     /// A second Stop handler that runs in the background (`asyncRewake`), so the turn ends normally. It waits for a
     /// reply typed into the pill; if one comes, it prints it to stderr and exits 2, which wakes Claude with it.
     /// Typing in the terminal instead makes the app release it with an empty reply (exit 0, nothing happens).
-    public static func replyCommand(port: Int) -> String {
+    public static func replyCommand(socket: String = defaultSocketArgument) -> String {
         "r=$(curl -s --connect-timeout 0.2 -m \(replyTimeout - 10) -X POST -H \"Content-Type: application/json\" "
-            + "-H \"X-Claude-PID: $PPID\" --data-binary @- http://127.0.0.1:\(port)/reply 2>/dev/null); "
+            + "-H \"X-Claude-PID: $PPID\" --data-binary @- --unix-socket \(socket) http://localhost/reply 2>/dev/null); "
             + "[ -n \"$r\" ] && { printf \"%s\\n\" \"$r\" >&2; exit 2; }; exit 0 \(marker)"
     }
 
     /// How long after a turn ends you can still reply from the pill.
     public static let replyTimeout = 7200
 
-    static func handlers(event: String, port: Int) -> [[String: Any]] {
+    static func handlers(event: String, socket: String) -> [[String: Any]] {
         switch event {
         case "PermissionRequest":
-            return [["type": "command", "command": permissionCommand(port: port), "timeout": permissionTimeout]]
+            return [["type": "command", "command": permissionCommand(socket: socket), "timeout": permissionTimeout]]
         case "Stop":
-            return [["type": "command", "command": command(port: port), "timeout": 2],
-                    ["type": "command", "command": replyCommand(port: port), "timeout": replyTimeout, "asyncRewake": true]]
+            return [["type": "command", "command": command(socket: socket), "timeout": 2],
+                    ["type": "command", "command": replyCommand(socket: socket), "timeout": replyTimeout, "asyncRewake": true]]
         default:
-            return [["type": "command", "command": command(port: port), "timeout": 2]]
+            return [["type": "command", "command": command(socket: socket), "timeout": 2]]
         }
     }
 
-    private static func expectedCommands(port: Int) -> [String: Set<String>] {
+    private static func expectedCommands(socket: String = defaultSocketArgument) -> [String: Set<String>] {
         Dictionary(uniqueKeysWithValues: events.map { event in
-            (event, Set(handlers(event: event, port: port).compactMap { $0["command"] as? String }))
+            (event, Set(handlers(event: event, socket: socket).compactMap { $0["command"] as? String }))
         })
     }
 
     // MARK: Pure transforms
 
-    public static func status(of settings: [String: Any], port: Int) -> Status {
+    public static func status(of settings: [String: Any], socket: String = defaultSocketArgument) -> Status {
         let hooks = settings["hooks"] as? [String: Any] ?? [:]
-        let expected = expectedCommands(port: port)
+        let expected = expectedCommands(socket: socket)
         var found: [String: [String]] = [:]
         for (event, value) in hooks {
             let ours = ourCommands(in: value)
@@ -86,11 +93,11 @@ public enum HookInstaller {
         return exact ? .installed : .outdated
     }
 
-    public static func installing(into settings: [String: Any], port: Int) -> [String: Any] {
+    public static func installing(into settings: [String: Any], socket: String = defaultSocketArgument) -> [String: Any] {
         var settings = removing(from: settings)
         var hooks = settings["hooks"] as? [String: Any] ?? [:]
         for event in events {
-            hooks[event] = (hooks[event] as? [Any] ?? []) + [["hooks": handlers(event: event, port: port)]]
+            hooks[event] = (hooks[event] as? [Any] ?? []) + [["hooks": handlers(event: event, socket: socket)]]
         }
         settings["hooks"] = hooks
         return settings
@@ -129,22 +136,22 @@ public enum HookInstaller {
 
     // MARK: Files
 
-    public static func status(settingsURL: URL = defaultSettingsURL, port: Int) -> Status {
-        do { return status(of: try read(settingsURL), port: port) } catch { return .invalidSettings(error.localizedDescription) }
+    public static func status(settingsURL: URL = defaultSettingsURL, socket: String = defaultSocketArgument) -> Status {
+        do { return status(of: try read(settingsURL), socket: socket) } catch { return .invalidSettings(error.localizedDescription) }
     }
 
     /// Installs (or updates) our hooks. Backs the file up first; does nothing if already installed.
     @discardableResult
-    public static func install(settingsURL: URL = defaultSettingsURL, port: Int) throws -> Bool {
+    public static func install(settingsURL: URL = defaultSettingsURL, socket: String = defaultSocketArgument) throws -> Bool {
         let settings = try read(settingsURL)
-        guard status(of: settings, port: port) != .installed else { return false }
-        try write(installing(into: settings, port: port), to: settingsURL)
+        guard status(of: settings, socket: socket) != .installed else { return false }
+        try write(installing(into: settings, socket: socket), to: settingsURL)
         return true
     }
 
     public static func uninstall(settingsURL: URL = defaultSettingsURL) throws {
         let settings = try read(settingsURL)
-        guard status(of: settings, port: 0) != .notInstalled else { return }
+        guard status(of: settings, socket: "") != .notInstalled else { return }
         try write(removing(from: settings), to: settingsURL)
     }
 

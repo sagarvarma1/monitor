@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import SwitchboardCore
+import UniformTypeIdentifiers
 
 /// Which session the dashboard shows; the pill can ask for one.
 final class DashboardNav: ObservableObject {
@@ -346,7 +347,7 @@ struct SessionSidePanel: View {
             }
             ForEach(summary.files.prefix(30)) { file in
                 Button {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: file.path))
+                    Self.openSafely(file.path)
                 } label: {
                     HStack(spacing: 6) {
                         Image(systemName: "doc").font(.system(size: 11)).foregroundStyle(.secondary)
@@ -366,7 +367,7 @@ struct SessionSidePanel: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Open \(file.path)")
+                .help(file.path)
                 .contextMenu {
                     Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) }
                 }
@@ -405,6 +406,21 @@ struct SessionSidePanel: View {
             .buttonStyle(.plain)
             .foregroundStyle(.secondary)
             .padding(.top, 4)
+        }
+    }
+
+    /// Opens documents in their app; anything that could run (a .command, an app, an executable) is only shown in
+    /// Finder, since a session can write files with any name and contents.
+    static func openSafely(_ path: String) {
+        let url = URL(fileURLWithPath: path)
+        let risky: Set<String> = ["app", "command", "tool", "terminal", "workflow", "scpt", "applescript", "scptd", "jar",
+                                  "pkg", "mpkg", "dmg", "webloc", "inetloc", "fileloc", "action", "prefpane", "osax"]
+        let type = UTType(filenameExtension: url.pathExtension)
+        let document = type.map { $0.conforms(to: .text) || $0.conforms(to: .image) || $0.conforms(to: .pdf) } ?? false
+        if document, !risky.contains(url.pathExtension.lowercased()), !FileManager.default.isExecutableFile(atPath: path) {
+            NSWorkspace.shared.open(url)
+        } else {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
         }
     }
 

@@ -9,12 +9,6 @@ public struct HTTPRequest {
 
     public static let maxBody = 2 * 1024 * 1024
 
-    /// Hooks are curl and never send these. A web page can reach 127.0.0.1, but its browser always adds one of the
-    /// fetch headers, and a DNS-rebinding page arrives under its own Host, so this shuts websites out.
-    public func isFromLocalTool(port: Int) -> Bool {
-        headers["origin"] == nil && headers["sec-fetch-site"] == nil && headers["sec-fetch-mode"] == nil
-            && ["127.0.0.1:\(port)", "localhost:\(port)"].contains(headers["host"]?.lowercased() ?? "")
-    }
 
     public enum ParseResult {
         case incomplete

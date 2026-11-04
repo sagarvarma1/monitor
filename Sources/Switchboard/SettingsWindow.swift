@@ -64,7 +64,9 @@ struct SettingsView: View {
                         }
                     }
                 }
-                LabeledContent("Listening on") { Text("127.0.0.1:\(setup.port)").font(.callout.monospaced()) }
+                LabeledContent("Hooks connect to") {
+                    Text((setup.socketPath as NSString).abbreviatingWithTildeInPath).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                }
             }
         }
         .formStyle(.grouped)
@@ -122,7 +124,7 @@ struct WelcomeView: View {
             Text("To connect, Switchboard will:").padding(.top, 2)
             VStack(alignment: .leading, spacing: 8) {
                 item("doc.badge.gearshape", "Add hooks to ~/.claude/settings.json", "Sessions report what they're doing. The file is backed up first and your other hooks are left alone.")
-                item("lock.shield", "Stay on your Mac", "Hooks talk to the app on 127.0.0.1 only. Session data stays in this Mac's Application Support folder.")
+                item("lock.shield", "Stay private", "Hooks talk to the app through a socket only your account can open, never the network. Session data stays in a private folder on this Mac.")
                 item("bell", "Ask to send notifications", "So a session that's blocked on you can get your attention.")
             }
             Toggle("Open Switchboard at login", isOn: $launchAtLogin).padding(.top, 2)

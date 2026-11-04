@@ -46,13 +46,20 @@ To uninstall, turn off the hooks in Settings, quit, and delete the app. Hooks le
 
 ## How it works
 
-Claude Code [hooks](https://code.claude.com/docs/en/hooks) POST each event to `127.0.0.1:7777`. A pure reducer (`Sources/SwitchboardCore/Reducer.swift`) turns events into per-session state, persisted in SQLite under `~/Library/Application Support/Switchboard/`. The `PermissionRequest` hook waits on the app for an answer, which is how Allow/Deny from the pill works. Sessions whose `claude` process has exited are pruned automatically.
+Claude Code [hooks](https://code.claude.com/docs/en/hooks) POST each event to the app over its Unix socket. A pure reducer (`Sources/SwitchboardCore/Reducer.swift`) turns events into per-session state, persisted in SQLite under `~/Library/Application Support/Switchboard/`. The `PermissionRequest` hook waits on the app for an answer, which is how Allow/Deny from the pill works. Sessions whose `claude` process has exited are pruned automatically.
 
 A second, background `Stop` hook (`asyncRewake`) waits for a reply typed into the pill or the Dashboard; when one comes it exits 2 with the text, which wakes Claude with it.
 
 ## Privacy and security
 
-Switchboard has no account, analytics or network service of its own. Its server listens on `127.0.0.1` only and refuses requests from websites (anything with a browser's `Origin` or `Sec-Fetch-*` headers, or the wrong `Host`). Other programs running as you on the same Mac can still reach it. Session data stays in `~/Library/Application Support/Switchboard/`.
+- **No network.** Switchboard has no account, analytics or server of its own. Hooks reach the app through a Unix socket at `~/Library/Application Support/Switchboard/hook.sock`, not a TCP port: the folder is private to your account, and the app checks each connection's user id. Web pages and other accounts on the Mac can't reach it, and while the app is closed nothing else can stand in for it.
+- **Fails closed.** If the app isn't running, hooks do nothing and Claude Code's own prompts stay in charge.
+- **You see what you approve.** Permission prompts in the pill show the full request, not a summary.
+- **Private data.** The session database and attachments are readable by your account only. Links in Claude's replies open only if they're web links; files that could run are shown in Finder rather than opened.
+- **Asks first.** Nothing in `~/.claude/settings.json` changes until you choose Connect.
+- **Verified installs.** `install.sh` checks the release's checksum, signature and notarization before installing.
+
+Programs running as you can still talk to the socket, as they could edit your Claude Code settings directly. See [SECURITY.md](SECURITY.md) to report a problem.
 
 ## Development
 
@@ -66,3 +73,7 @@ scripts/fake-events.sh --live  # simulate five sessions changing state
 `scripts/release.sh` builds the universal, notarized `dist/Switchboard.dmg`; upload it and `Switchboard.dmg.sha256` to a GitHub release. `swift scripts/make-icon.swift` redraws the app icon.
 
 `install-hooks.sh` / `uninstall-hooks.sh` do the hook setup from the command line (the app does the same thing itself).
+
+## License
+
+[MIT](LICENSE)
