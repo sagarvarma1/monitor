@@ -49,15 +49,30 @@ enum TerminalFocus {
     static func procInfo(_ pid: Int32) -> ProcInfo? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return nil }
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return kernelProcInfo(pid) }
         let name = withUnsafePointer(to: &info.pbi_name) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN) * 2) { String(cString: $0) }
         }
-        var tty: String?
-        if info.e_tdev != UInt32(bitPattern: -1), let dev = devname(dev_t(bitPattern: info.e_tdev), S_IFCHR) {
-            tty = "/dev/" + String(cString: dev)
+        return ProcInfo(pid: pid, ppid: Int32(info.pbi_ppid), tty: ttyPath(info.e_tdev), name: name)
+    }
+
+    /// proc_pidinfo refuses processes owned by another user, such as the setuid-root `login` that Terminal and
+    /// iTerm2 start shells under, which would end the walk up to the terminal app there. sysctl (what `ps` uses)
+    /// still answers for those.
+    private static func kernelProcInfo(_ pid: Int32) -> ProcInfo? {
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var kp = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        guard sysctl(&mib, 4, &kp, &size, nil, 0) == 0, size == MemoryLayout<kinfo_proc>.size else { return nil }
+        let name = withUnsafePointer(to: &kp.kp_proc.p_comm) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN) + 1) { String(cString: $0) }
         }
-        return ProcInfo(pid: pid, ppid: Int32(info.pbi_ppid), tty: tty, name: name)
+        return ProcInfo(pid: pid, ppid: kp.kp_eproc.e_ppid, tty: ttyPath(UInt32(bitPattern: kp.kp_eproc.e_tdev)), name: name)
+    }
+
+    private static func ttyPath(_ dev: UInt32) -> String? {
+        guard dev != UInt32(bitPattern: -1), let name = devname(dev_t(bitPattern: dev), S_IFCHR) else { return nil }
+        return "/dev/" + String(cString: name)
     }
 
     static func cwd(of pid: Int32) -> String? {
