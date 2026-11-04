@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-package:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      # Pinned to a commit, not a tag: tags can be moved.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Core tests
+        run: swift test
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Build the app and DMG (unsigned)
+        run: scripts/release.sh --unsigned
+
+      - name: Check entitlements
+        run: codesign -d --entitlements - --xml dist/Switchboard.app
