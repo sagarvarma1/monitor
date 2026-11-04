@@ -168,14 +168,18 @@ final class AppWindows: NSObject, NSWindowDelegate {
     func showDashboard(selecting id: String? = nil) {
         if let id { nav.selectedID = id }
         if dashboard == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "Switchboard"
+            // Content runs up under a clear title bar, like Mail or Notes: no separate band with a title in it.
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbarStyle = .unified
             let host = NSHostingController(rootView: makeDashboard())
             host.sizingOptions = [.minSize]  // the window keeps its own size, SwiftUI only sets the minimum
             window.contentViewController = host
-            window.setContentSize(NSSize(width: 1000, height: 640))
+            window.setContentSize(NSSize(width: 1100, height: 700))
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()

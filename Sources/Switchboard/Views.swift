@@ -749,14 +749,17 @@ struct ReplyField: View {
 /// for the panel's 11pt text.
 struct MarkdownText: View {
     let source: String
+    /// Body size; headings and code scale from it. 11 suits the pill, the dashboard reads better larger.
+    var size: CGFloat = 11
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: size * 0.5) {
             ForEach(Array(MarkdownBlock.parse(source).enumerated()), id: \.offset) { _, block in
                 view(for: block)
             }
         }
-        .font(.system(size: 11))
+        .font(.system(size: size))
+        .lineSpacing(size > 11 ? 2 : 0)
         .textSelection(.enabled)
     }
 
@@ -765,7 +768,7 @@ struct MarkdownText: View {
         switch block {
         case .heading(let level, let text):
             Text(inline(text))
-                .font(.system(size: level <= 2 ? 12.5 : 11.5, weight: .semibold))
+                .font(.system(size: size + (level <= 2 ? 1.5 : 0.5), weight: .semibold))
                 .padding(.top, 3)
         case .listItem(let depth, let marker, let text):
             HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -778,7 +781,7 @@ struct MarkdownText: View {
             .padding(.leading, CGFloat(depth) * 14)
         case .code(let text):
             Text(text)
-                .font(.system(size: 10.5, design: .monospaced))
+                .font(.system(size: size - 0.5, design: .monospaced))
                 .padding(.horizontal, 7).padding(.vertical, 5)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.07)))

@@ -102,6 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKey = HotKey { [weak self] in self?.panel.toggle() }
         panel.show()
+        // Development: open the Dashboard straight away (screenshots, UI work).
+        if ProcessInfo.processInfo.environment["SWITCHBOARD_OPEN_DASHBOARD"] != nil { windows.showDashboard(selecting: nil) }
         installStatusItem()
         Watchdog.start()
     }
