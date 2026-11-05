@@ -37,7 +37,7 @@ public enum Reducer {
         s.lastEventAt = now
         s.lastEvent = e.name
         if let pid = e.pid { s.pid = pid }
-        if let path = e.string("transcript_path"), path.hasSuffix(".jsonl") { s.transcriptPath = path }
+        if let path = e.string("transcript_path"), PathPolicy.isAllowedTranscript(path) { s.transcriptPath = path }
 
         switch e.name {
         case "SessionStart":
@@ -73,8 +73,10 @@ public enum Reducer {
                 block(&s, tool: e.toolName, input: e.toolInput, now: now)
             } else {
                 let detail = "Claude wants to use \(e.toolName):\n\n" + Summarizer.prettyJSON(e.toolInput)
-                setWaiting(&s, .blocked, need: "Allow \(Summarizer.toolCall(e.toolName, e.toolInput))?", detail: detail, now: now)
+                setWaiting(&s, .blocked, need: "Allow \(SafeText.reveal(Summarizer.toolCall(e.toolName, e.toolInput)).text)?",
+                           detail: detail, now: now)
                 s.decisionID = e.string(PermissionDecision.requestIDKey)
+                s.alwaysRule = PermissionDecision.describeAlways(e.raw["permission_suggestions"])
             }
 
         case "PostToolUse", "PostToolUseFailure":

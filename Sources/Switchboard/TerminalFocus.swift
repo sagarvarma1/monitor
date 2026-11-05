@@ -8,7 +8,7 @@ enum TerminalFocus {
 
     static func focus(_ session: Session) {
         let claudePID = liveClaudePID(for: session)
-        let tty = claudePID.flatMap { procInfo($0)?.tty }
+        let tty = claudePID.flatMap { procInfo($0)?.tty }.flatMap(safeTTY)
         let app = claudePID.flatMap(owningApp) ?? fallbackTerminalApp()
 
         guard let app else {
@@ -114,6 +114,12 @@ enum TerminalFocus {
     }
 
     // MARK: AppleScript
+
+    /// A tty is spliced into AppleScript source, so only a plain "/dev/ttysNNN" is ever used. (It comes from the
+    /// kernel, not a payload, but the script mustn't depend on that.)
+    static func safeTTY(_ tty: String) -> String? {
+        tty.range(of: #"^/dev/ttys[0-9]{1,5}$"#, options: .regularExpression) != nil ? tty : nil
+    }
 
     static func terminalScript(tty: String) -> String {
         """

@@ -304,8 +304,10 @@ struct ApprovalCard: View {
             Label(session.need, systemImage: "hand.raised.fill")
                 .font(.system(size: DS.body, weight: .semibold))
                 .foregroundStyle(SessionStatus.blocked.color)
+            let revealed = SafeText.reveal(session.detail)
+            if revealed.hiddenCount > 0 { HiddenCharactersWarning(count: revealed.hiddenCount) }
             ScrollView {
-                Text(session.detail)
+                Text(revealed.text)
                     .font(.system(size: 11.5, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -319,13 +321,19 @@ struct ApprovalCard: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 Button("Deny") { onDecide(.deny) }
-                Button("Always Allow") { onDecide(.allowAlways) }
-                    .help("Allow, and add the rule Claude Code suggests so it stops asking for this")
+                if let rule = session.alwaysRule {
+                    Button("Always Allow") { onDecide(.allowAlways) }
+                        .help("Allow, and add this rule so Claude Code stops asking: \(rule)")
+                }
                 Button("Allow") { onDecide(.allow) }
                     .buttonStyle(.borderedProminent)
                     .tint(SessionStatus.working.color)
             }
             .controlSize(.regular)
+            if let rule = session.alwaysRule {
+                Text("Always Allow adds: \(rule)").font(.system(size: 11)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: DS.radius, style: .continuous)
@@ -905,7 +913,11 @@ enum FileOpener {
         let risky: Set<String> = ["app", "command", "tool", "terminal", "workflow", "scpt", "applescript", "scptd", "jar",
                                   "pkg", "mpkg", "dmg", "webloc", "inetloc", "fileloc", "action", "prefpane", "osax"]
         let type = UTType(filenameExtension: url.pathExtension)
-        let document = type.map { $0.conforms(to: .text) || $0.conforms(to: .image) || $0.conforms(to: .pdf) } ?? false
+        // Scripts are "text" too, but their default app can run them (Python Launcher runs a .py on open).
+        let document = type.map {
+            ($0.conforms(to: .text) || $0.conforms(to: .image) || $0.conforms(to: .pdf))
+                && !$0.conforms(to: .script) && !$0.conforms(to: .executable) && !$0.conforms(to: .html)
+        } ?? false
         if document, !risky.contains(url.pathExtension.lowercased()), !FileManager.default.isExecutableFile(atPath: path) {
             NSWorkspace.shared.open(url)
         } else {

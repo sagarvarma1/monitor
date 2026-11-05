@@ -122,6 +122,25 @@ public enum HookInstaller {
         return settings
     }
 
+    /// Hook commands that reach Switchboard's socket but aren't Switchboard's own entries: something else posing as
+    /// it, or an edited copy. Shown as a warning in Settings; never removed automatically.
+    public static func foreignSocketCommands(in settings: [String: Any]) -> [String] {
+        let hooks = settings["hooks"] as? [String: Any] ?? [:]
+        return hooks.keys.sorted().flatMap { event -> [String] in
+            (hooks[event] as? [Any] ?? []).flatMap { matcher -> [String] in
+                ((matcher as? [String: Any])?["hooks"] as? [Any] ?? []).compactMap { handler -> String? in
+                    guard !isOurs(handler), let command = (handler as? [String: Any])?["command"] as? String,
+                          command.contains("Switchboard/hook.sock") else { return nil }
+                    return "\(event): \(command)"
+                }
+            }
+        }
+    }
+
+    public static func foreignSocketCommands(settingsURL: URL = defaultSettingsURL) -> [String] {
+        (try? read(settingsURL)).map(foreignSocketCommands(in:)) ?? []
+    }
+
     private static func isOurs(_ handler: Any) -> Bool {
         ((handler as? [String: Any])?["command"] as? String)?.hasSuffix(marker) == true
     }

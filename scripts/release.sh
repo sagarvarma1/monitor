@@ -35,6 +35,21 @@ else
 fi
 codesign --verify --strict "$APP"
 
+# The shipped app must carry exactly the entitlements in Resources/Switchboard.entitlements: nothing like
+# get-task-allow (lets other processes attach a debugger) or disable-library-validation (lets it load unsigned code).
+SIGNED_ENT=$(mktemp)
+codesign -d --entitlements - --xml "$APP" > "$SIGNED_ENT" 2>/dev/null
+if ! diff <(plutil -p "$SIGNED_ENT") <(plutil -p Resources/Switchboard.entitlements) >/dev/null; then
+    echo "Entitlements differ from Resources/Switchboard.entitlements:" >&2
+    plutil -p "$SIGNED_ENT" >&2
+    exit 1
+fi
+rm -f "$SIGNED_ENT"
+if [[ -n "$IDENTITY" ]] && ! codesign -d -v "$APP" 2>&1 | grep -q 'flags=.*runtime'; then
+    echo "The hardened runtime is off." >&2
+    exit 1
+fi
+
 STAGE=$(mktemp -d)
 trap 'rm -rf "$STAGE"' EXIT
 cp -R "$APP" "$STAGE/"

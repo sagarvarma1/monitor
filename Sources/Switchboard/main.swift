@@ -64,9 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.ui.expandedID = id
         }
 
-        server = EventServer(path: socketPath,
-                             onEvent: { [weak self] in self?.store.apply($0) },
-                             snapshot: { [weak self] in self?.store.snapshotJSON() ?? Data() })
+        server = EventServer(path: socketPath, onEvent: { [weak self] in self?.store.apply($0) })
         server.onStateChange = { [weak self] error in self?.store.serverError = error }
         server.onRequestGone = { [weak self] id in self?.store.requestGone(id) }
         store.onDecide = { [weak self] id, decision in self?.server.decide(id, decision) }

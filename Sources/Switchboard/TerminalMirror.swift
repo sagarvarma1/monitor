@@ -50,7 +50,8 @@ final class TerminalMirror: ObservableObject {
     }
 
     private nonisolated static func read(_ session: Session) -> State {
-        guard let pid = TerminalFocus.liveClaudePID(for: session), let tty = TerminalFocus.procInfo(pid)?.tty else { return .notFound }
+        guard let pid = TerminalFocus.liveClaudePID(for: session),
+              let tty = TerminalFocus.procInfo(pid)?.tty.flatMap(TerminalFocus.safeTTY) else { return .notFound }
         // Under tmux the process tree stops at the tmux server, not a GUI app, whichever terminal is showing it.
         guard let app = TerminalFocus.owningApp(of: pid) else { return readTmux(tty: tty) }
         let name = app.localizedName ?? "this terminal"
@@ -73,6 +74,7 @@ final class TerminalMirror: ObservableObject {
               let panes = run(tmux, ["list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"]), panes.status == 0,
               let line = panes.output.split(separator: "\n").first(where: { $0.hasPrefix(tty + " ") }),
               let pane = line.split(separator: " ").last,
+              pane.range(of: #"^%[0-9]{1,6}$"#, options: .regularExpression) != nil,
               let capture = run(tmux, ["capture-pane", "-e", "-p", "-t", String(pane)]), capture.status == 0 else { return .notFound }
         return screen(capture.output, ansi: true)
     }

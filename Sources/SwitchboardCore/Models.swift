@@ -33,6 +33,8 @@ public struct Session: Equatable, Codable, Identifiable, Sendable {
     public var decisionID: String?
     /// The session's transcript (JSONL), from the hook payload. Feeds the dashboard's activity feed.
     public var transcriptPath: String?
+    /// What "Always" would add for the waiting permission prompt, in words (nil: nothing beyond Allow).
+    public var alwaysRule: String?
 
     public init(id: String, cwd: String, branch: String? = nil, status: SessionStatus = .working,
                 need: String = "", detail: String = "", waitingSince: Date? = nil,

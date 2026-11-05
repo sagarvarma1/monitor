@@ -342,7 +342,7 @@ struct PeekView: View {
                     .fixedSize(horizontal: false, vertical: true)
                 if session.decisionID != nil {
                     ApprovalDetail(text: session.detail).padding(.top, 2)
-                    DecisionButtons(onDecide: onDecide).padding(.top, 4)
+                    DecisionButtons(alwaysRule: session.alwaysRule, onDecide: onDecide).padding(.top, 4)
                 } else {
                     Text("Click to open")
                         .font(.system(size: 10, weight: .medium))
@@ -576,7 +576,7 @@ struct SessionRow: View {
             }
             if session.decisionID != nil {
                 ApprovalDetail(text: session.detail).padding(.leading, 16)
-                DecisionButtons(onDecide: onDecide).padding(.leading, 16)
+                DecisionButtons(alwaysRule: session.alwaysRule, onDecide: onDecide).padding(.leading, 16)
             }
             if expanded { details }
             if let reply {
@@ -642,27 +642,56 @@ struct SessionRow: View {
 /// Answers a waiting permission prompt. Claude Code's own prompt stays up in the terminal meanwhile;
 /// whichever answer comes first wins.
 /// The whole request, next to Allow: a one-line summary could hide the part of a command that matters.
+/// Hidden characters are shown as visible stand-ins (see SafeText), with a warning when there are any.
 struct ApprovalDetail: View {
     let text: String
 
     var body: some View {
-        ScrollView {
-            Text(text)
-                .font(.system(size: 10.5, design: .monospaced))
-                .textSelection(.enabled)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(6)
+        let revealed = SafeText.reveal(text)
+        VStack(alignment: .leading, spacing: 4) {
+            if revealed.hiddenCount > 0 { HiddenCharactersWarning(count: revealed.hiddenCount, size: 10.5) }
+            ScrollView {
+                Text(revealed.text)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(6)
+            }
+            .frame(maxHeight: 120)
+            .fixedSize(horizontal: false, vertical: true)
+            .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
         }
-        .frame(maxHeight: 120)
-        .fixedSize(horizontal: false, vertical: true)
-        .background(RoundedRectangle(cornerRadius: 6, style: .continuous).fill(Color.primary.opacity(0.06)))
+    }
+}
+
+struct HiddenCharactersWarning: View {
+    let count: Int
+    var size: CGFloat = 11
+
+    var body: some View {
+        Label("\(count) hidden or text-reordering character\(count == 1 ? "" : "s"), shown as ⟨U+…⟩ or ␛. The request may not be what it looks like.",
+              systemImage: "exclamationmark.triangle.fill")
+            .font(.system(size: size, weight: .medium))
+            .foregroundStyle(SessionStatus.review.color)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }
 
 struct DecisionButtons: View {
+    var alwaysRule: String?
     var onDecide: (PermissionDecision) -> Void
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            buttons
+            if let alwaysRule {
+                Text("Always adds: \(alwaysRule)")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    private var buttons: some View {
         HStack(spacing: 6) {
             Button("Deny") { onDecide(.deny) }
                 .buttonStyle(DecisionButtonStyle(fill: nil))
@@ -670,9 +699,11 @@ struct DecisionButtons: View {
             Button("Allow") { onDecide(.allow) }
                 .buttonStyle(DecisionButtonStyle(fill: SessionStatus.working.color))
                 .help("Allow this once")
-            Button("Always") { onDecide(.allowAlways) }
-                .buttonStyle(DecisionButtonStyle(fill: nil))
-                .help("Allow, and add the rule Claude Code suggests so it stops asking for this")
+            if alwaysRule != nil {
+                Button("Always") { onDecide(.allowAlways) }
+                    .buttonStyle(DecisionButtonStyle(fill: nil))
+                    .help("Allow, and add the rule shown below so Claude Code stops asking for this")
+            }
         }
     }
 }

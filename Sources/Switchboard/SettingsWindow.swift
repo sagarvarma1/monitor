@@ -55,6 +55,17 @@ struct SettingsView: View {
                 Text("Switchboard adds hooks to your Claude Code settings so sessions report what they're doing. Your other hooks are left alone, and the file is backed up before every change.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            if !setup.foreignHooks.isEmpty {
+                Section {
+                    Label("Other hooks talk to Switchboard", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(SessionStatus.blocked.color)
+                    Text("These entries in settings.json weren't added by Switchboard but connect to its socket. If you didn't add them, remove them.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(setup.foreignHooks, id: \.self) { command in
+                        Text(SafeText.reveal(command).text).font(.caption.monospaced()).textSelection(.enabled).lineLimit(3)
+                    }
+                }
+            }
             Section {
                 LabeledContent("Settings file") {
                     HStack {
