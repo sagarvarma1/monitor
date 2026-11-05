@@ -45,7 +45,9 @@ if ! diff <(plutil -p "$SIGNED_ENT") <(plutil -p Resources/Switchboard.entitleme
     exit 1
 fi
 rm -f "$SIGNED_ENT"
-if [[ -n "$IDENTITY" ]] && ! codesign -d -v "$APP" 2>&1 | grep -q 'flags=.*runtime'; then
+# Captured first: with pipefail, `grep -q` exiting early would fail codesign's side of the pipe.
+SIGNATURE=$(codesign -d -v "$APP" 2>&1)
+if [[ -n "$IDENTITY" && "$SIGNATURE" != *"(runtime)"* ]]; then
     echo "The hardened runtime is off." >&2
     exit 1
 fi
