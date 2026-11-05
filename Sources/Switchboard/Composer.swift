@@ -60,42 +60,57 @@ struct ChatComposer: View {
             if let queued {
                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Image(systemName: "clock").font(.system(size: 11)).foregroundStyle(.secondary)
-                    Text(Summarizer.oneLine(queued, max: 90)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                    Text("Queued: \(Summarizer.oneLine(queued, max: 80))").font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 4)
                     Button("Cancel") { store.cancelQueued(session.id) }.buttonStyle(.plain).font(.system(size: 11)).foregroundStyle(Color.accentColor)
                 }
+                .padding(.horizontal, 4)
             }
-            if !images.isEmpty { thumbnails }
-            HStack(alignment: .bottom, spacing: 8) {
-                Button(action: chooseImages) {
-                    Image(systemName: "photo.badge.plus").font(.system(size: 15)).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 8) {
+                if !images.isEmpty { thumbnails }
+                HStack(alignment: .bottom, spacing: 10) {
+                    Button(action: chooseImages) {
+                        Image(systemName: "paperclip").font(.system(size: 14, weight: .medium)).foregroundStyle(.secondary)
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Attach images (or drop or paste them here)")
+                    TextField(placeholder, text: $text, axis: .vertical)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 13))
+                        .lineLimit(1...8)
+                        .focused($focused)
+                        .onSubmit(send)
+                        .padding(.vertical, 3)
+                    Button(action: send) {
+                        Image(systemName: "arrow.up").font(.system(size: 12, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 24, height: 24)
+                            .background(Circle().fill(canSend ? Color.accentColor : Color.secondary.opacity(0.35)))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!canSend)
+                    .help("Send (Return). Option-Return adds a line.")
                 }
-                .buttonStyle(.plain)
-                .help("Attach images (or drop or paste them here)")
-                TextField(placeholder, text: $text, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .font(.system(size: 12.5))
-                    .lineLimit(1...6)
-                    .focused($focused)
-                    .onSubmit(send)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 7)
-                    .background(RoundedRectangle(cornerRadius: 10, style: .continuous).fill(Color.primary.opacity(0.07)))
-                Button(action: send) {
-                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 22))
-                        .foregroundStyle(canSend ? Color.accentColor : Color.secondary)
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSend)
-                .help("Send (Return). Option-Return adds a line.")
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(Color(nsColor: .textBackgroundColor)))
+            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(dropTargeted || focused ? Color.accentColor.opacity(0.6) : Color.primary.opacity(0.12)))
+            .shadow(color: .black.opacity(0.06), radius: 6, y: 2)
+            .contentShape(Rectangle())
+            .onTapGesture { focused = true }
             if !canReceive && session.status == .review {
                 Text("Claude isn't listening for messages here. Send one message in its terminal to reconnect; this will go out after that turn.")
-                    .font(.system(size: 10.5)).foregroundStyle(.secondary)
+                    .font(.system(size: 10.5)).foregroundStyle(.secondary).padding(.horizontal, 4)
             }
         }
-        .padding(10)
-        .background(dropTargeted ? Color.accentColor.opacity(0.1) : Color.clear)
+        .frame(maxWidth: 760)
+        .padding(.horizontal, 24)
+        .padding(.top, 8)
+        .padding(.bottom, 16)
+        .frame(maxWidth: .infinity)
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted, perform: drop)
         .onAppear(perform: watchPaste)
         .onDisappear {
@@ -105,7 +120,7 @@ struct ChatComposer: View {
     }
 
     private var placeholder: String {
-        canReceive ? "Message Claude…" : "Message Claude (sends when this turn ends)…"
+        canReceive ? "Message Claude" : "Message Claude — sends when this turn ends"
     }
 
     private var thumbnails: some View {

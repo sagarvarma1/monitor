@@ -5,10 +5,11 @@
 #   scripts/fake-events.sh --end    send SessionEnd for all 5 fake sessions
 set -euo pipefail
 
-URL="http://127.0.0.1:${SWITCHBOARD_PORT:-7777}/event"
+SOCK="${SWITCHBOARD_SOCKET:-$HOME/Library/Application Support/Switchboard/hook.sock}"
+URL="http://localhost/event"
 ROOT="${TMPDIR:-/tmp}/switchboard-fake"
 command -v jq >/dev/null || { echo "jq is required" >&2; exit 1; }
-curl -s -m 1 "${URL%/event}/health" >/dev/null || { echo "Switchboard isn't running on ${URL%/event}" >&2; exit 1; }
+curl -s -m 1 --unix-socket "$SOCK" "${URL%/event}/health" >/dev/null || { echo "Switchboard isn't running on $SOCK" >&2; exit 1; }
 
 # name:branch pairs. Real git repos so the panel shows branches.
 SESSIONS=(api-server:feature/billing web-frontend:main infra:fix/terraform-drift docs-site:main ml-pipeline:exp/new-tokenizer)
@@ -28,7 +29,7 @@ send() {
     local ts; ts=$(( $(date +%s) - ago ))
     jq -cn --arg sid "$(sid "$name")" --arg cwd "$ROOT/$name" --arg ev "$event" --argjson ts "$ts" --argjson extra "$extra" \
         '{session_id: $sid, cwd: $cwd, hook_event_name: $ev, transcript_path: "/dev/null", permission_mode: "default", switchboard_ts: $ts} + $extra' \
-        | curl -s -o /dev/null -m 1 -H "Content-Type: application/json" --data-binary @- "$URL"
+        | curl -s -o /dev/null -m 1 --unix-socket "$SOCK" -H "Content-Type: application/json" --data-binary @- "$URL"
     printf '  %-13s %s\n' "$name" "$event"
 }
 

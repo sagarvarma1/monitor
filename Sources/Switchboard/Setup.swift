@@ -7,6 +7,8 @@ import SwitchboardCore
 final class Setup: ObservableObject {
     @Published private(set) var hooks: HookInstaller.Status = .notInstalled
     @Published private(set) var loginItem: SMAppService.Status = .notRegistered
+    /// Hooks in settings.json that talk to our socket but aren't ours (see HookInstaller.foreignSocketCommands).
+    @Published private(set) var foreignHooks: [String] = []
     /// Set when we just installed hooks. Current Claude Code picks them up live; older versions need a restart.
     @Published var restartHint = false
 
@@ -16,7 +18,9 @@ final class Setup: ObservableObject {
     /// Setup has been agreed to (now, or on an earlier launch).
     var onReady: (() -> Void)?
 
-    let port: Int
+    /// How the hook commands name the socket, and where it actually is.
+    let socket: String
+    let socketPath: String
     private let defaults = UserDefaults.standard
     private var timer: Timer?
 
@@ -35,15 +39,16 @@ final class Setup: ObservableObject {
         static let consented = "setupConsented"
     }
 
-    init(port: Int) {
-        self.port = port
+    init(socket: String, socketPath: String) {
+        self.socket = socket
+        self.socketPath = socketPath
     }
 
     func start() {
         // Copies from before the welcome screen existed have already been set up.
         if defaults.bool(forKey: Key.loginConfigured) { defaults.set(true, forKey: Key.consented) }
         refreshLoginItem()
-        hooks = HookInstaller.status(port: port)
+        refreshHooks()
         // Self-heal: Claude Code can rewrite settings.json from a stale snapshot and drop our entries.
         timer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.ensureHooks()
@@ -71,18 +76,27 @@ final class Setup: ObservableObject {
 
     var hooksEnabled: Bool { defaults.bool(forKey: Key.consented) && !defaults.bool(forKey: Key.hooksOff) }
 
+    private func refreshHooks() {
+        hooks = HookInstaller.status(socket: socket)
+        let foreign = HookInstaller.foreignSocketCommands()
+        if foreign != foreignHooks {
+            foreignHooks = foreign
+            if !foreign.isEmpty { NSLog("Switchboard: hooks not added by Switchboard use its socket: %@", foreign.joined(separator: " | ")) }
+        }
+    }
+
     func ensureHooks() {
-        hooks = HookInstaller.status(port: port)
+        refreshHooks()
         guard hooksEnabled, hooks == .notInstalled || hooks == .outdated else { return }
         do {
-            if try HookInstaller.install(port: port) {
+            if try HookInstaller.install(socket: socket) {
                 restartHint = true
                 onHooksInstalled?()
             }
         } catch {
             NSLog("Switchboard: could not install hooks: %@", error.localizedDescription)
         }
-        hooks = HookInstaller.status(port: port)
+        refreshHooks()
     }
 
     func setHooksEnabled(_ on: Bool) {
@@ -95,7 +109,7 @@ final class Setup: ObservableObject {
                 NSLog("Switchboard: could not remove hooks: %@", error.localizedDescription)
             }
             restartHint = false
-            hooks = HookInstaller.status(port: port)
+            refreshHooks()
         }
     }
 

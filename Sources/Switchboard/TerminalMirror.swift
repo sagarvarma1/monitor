@@ -50,7 +50,8 @@ final class TerminalMirror: ObservableObject {
     }
 
     private nonisolated static func read(_ session: Session) -> State {
-        guard let pid = TerminalFocus.liveClaudePID(for: session), let tty = TerminalFocus.procInfo(pid)?.tty else { return .notFound }
+        guard let pid = TerminalFocus.liveClaudePID(for: session),
+              let tty = TerminalFocus.procInfo(pid)?.tty.flatMap(TerminalFocus.safeTTY) else { return .notFound }
         // Under tmux the process tree stops at the tmux server, not a GUI app, whichever terminal is showing it.
         guard let app = TerminalFocus.owningApp(of: pid) else { return readTmux(tty: tty) }
         let name = app.localizedName ?? "this terminal"
@@ -73,6 +74,7 @@ final class TerminalMirror: ObservableObject {
               let panes = run(tmux, ["list-panes", "-a", "-F", "#{pane_tty} #{pane_id}"]), panes.status == 0,
               let line = panes.output.split(separator: "\n").first(where: { $0.hasPrefix(tty + " ") }),
               let pane = line.split(separator: " ").last,
+              pane.range(of: #"^%[0-9]{1,6}$"#, options: .regularExpression) != nil,
               let capture = run(tmux, ["capture-pane", "-e", "-p", "-t", String(pane)]), capture.status == 0 else { return .notFound }
         return screen(capture.output, ansi: true)
     }
@@ -159,13 +161,29 @@ struct TerminalMirrorView: View {
         Text(text).font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(24)
     }
 
-    private func styled(_ text: String, ansi: Bool) -> AttributedString {
+    /// Width of one monospaced character per point of font size (SF Mono is about 0.6).
+    private static let advancePerPoint: CGFloat = {
+        let font = NSFont.monospacedSystemFont(ofSize: 100, weight: .regular)
+        return ("M" as NSString).size(withAttributes: [.font: font]).width / 100
+    }()
+
+    /// The size at which the terminal's widest line fills the pane, so the whole screen is visible at any window
+    /// width. Clamped so a narrow window stays legible (it scrolls sideways then) and a wide one isn't huge.
+    private static func fontSize(for text: String, width: CGFloat) -> CGFloat {
+        let columns = text.split(separator: "\n", omittingEmptySubsequences: false)
+            .map { $0.replacingOccurrences(of: #"\s+$"#, with: "", options: .regularExpression).count }
+            .max() ?? 0
+        guard columns > 0, width > 0 else { return 12 }
+        return min(14, max(8, (width / (CGFloat(columns) * advancePerPoint)).rounded(.down)))
+    }
+
+    private func styled(_ text: String, ansi: Bool, size: CGFloat) -> AttributedString {
         let runs = ansi ? TerminalText.parseANSI(text) : TerminalText.highlightClaudeCode(text)
         var out = AttributedString()
         for run in runs {
             var part = AttributedString(run.text)
             let weight: Font.Weight = run.bold ? .bold : .regular
-            var font = Font.system(size: 11.5, weight: weight, design: .monospaced)
+            var font = Font.system(size: size, weight: weight, design: .monospaced)
             if run.italic { font = font.italic() }
             part.font = font
             part.foregroundColor = Self.color(run.color).opacity(run.dim ? 0.55 : 1)
@@ -191,10 +209,12 @@ struct TerminalMirrorView: View {
     }
 
     private func terminal(_ text: String, ansi: Bool) -> some View {
-        ScrollViewReader { proxy in
+        GeometryReader { geo in
+            let size = Self.fontSize(for: text, width: geo.size.width - 20)
+            ScrollViewReader { proxy in
             ScrollView([.vertical, .horizontal]) {
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(styled(text, ansi: ansi))
+                    Text(styled(text, ansi: ansi, size: size))
                         .textSelection(.enabled)
                         .fixedSize()
                     Color.clear.frame(height: 1).id("end")
@@ -212,6 +232,8 @@ struct TerminalMirrorView: View {
             }
             .onChange(of: text) { _ in if following { proxy.scrollTo("end", anchor: .bottomLeading) } }
             .onAppear { proxy.scrollTo("end", anchor: .bottomLeading) }
+            }
         }
+        .background(Color(white: 0.09))
     }
 }

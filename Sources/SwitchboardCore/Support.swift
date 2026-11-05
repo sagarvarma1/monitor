@@ -76,12 +76,12 @@ public enum GitInfo {
                 var gitDir = dotGit
                 if !isDir.boolValue {
                     // Worktree or submodule: ".git" is a file containing "gitdir: <path>".
-                    guard let text = try? String(contentsOf: dotGit, encoding: .utf8),
+                    guard let text = PathPolicy.readSmallText(dotGit.path),
                           let line = text.split(separator: "\n").first(where: { $0.hasPrefix("gitdir:") }) else { return nil }
                     let path = line.dropFirst("gitdir:".count).trimmingCharacters(in: .whitespaces)
                     gitDir = URL(fileURLWithPath: path, relativeTo: dir).standardizedFileURL
                 }
-                guard let head = try? String(contentsOf: gitDir.appendingPathComponent("HEAD"), encoding: .utf8) else { return nil }
+                guard let head = PathPolicy.readSmallText(gitDir.appendingPathComponent("HEAD").path) else { return nil }
                 let trimmed = head.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.hasPrefix("ref: refs/heads/") { return String(trimmed.dropFirst("ref: refs/heads/".count)) }
                 return trimmed.isEmpty ? nil : String(trimmed.prefix(7))  // detached HEAD

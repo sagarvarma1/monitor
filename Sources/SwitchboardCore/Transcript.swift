@@ -90,6 +90,7 @@ public final class TranscriptReader {
 
     private var offset: UInt64 = 0
     private var partial = Data()
+    private var skippingLine = false
     private var summary = TranscriptSummary()
     private var toolIndex: [String: Int] = [:]          // tool_use id -> items index
     private var pendingTaskCreates: [String: Int] = [:] // tool_use id -> todos index, until the result names it
@@ -111,28 +112,46 @@ public final class TranscriptReader {
     /// Where Claude Code keeps a session's transcript, for sessions whose hooks didn't say.
     public static func defaultPath(cwd: String, sessionID: String) -> String {
         let folder = cwd.map { $0.isLetter || $0.isNumber ? String($0) : "-" }.joined()
-        return NSHomeDirectory() + "/.claude/projects/\(folder)/\(sessionID).jsonl"
+        let file = sessionID.map { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" ? String($0) : "-" }.joined()
+        return NSHomeDirectory() + "/.claude/projects/\(folder)/\(file).jsonl"
     }
 
+    /// Transcripts can run to hundreds of megabytes, so they're read in chunks, and a single line longer than this
+    /// (a giant tool result) is skipped rather than buffered.
+    static let chunkSize = 4 << 20
+    static let maxLine = 16 << 20
+
     public func update() -> TranscriptSummary {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return summary }
+        guard let handle = PathPolicy.openRegularFile(path) else { return summary }
         defer { try? handle.close() }
         let size = (try? handle.seekToEnd()) ?? 0
         if size < offset { reset() }  // rewritten or truncated: start over
         guard size > offset else { return summary }
         try? handle.seek(toOffset: offset)
-        var data = partial + ((try? handle.readToEnd()) ?? Data())
-        offset = size
-        // Keep an unterminated last line for next time.
-        if let lastNewline = data.lastIndex(of: 0x0A) {
-            partial = data[data.index(after: lastNewline)...]
-            data = data[..<lastNewline]
-        } else {
-            partial = data
-            return summary
-        }
-        for line in data.split(separator: 0x0A) where !line.isEmpty {
-            if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] { ingest(obj) }
+        while offset < size, let chunk = try? handle.read(upToCount: Self.chunkSize), !chunk.isEmpty {
+            offset += UInt64(chunk.count)
+            var data = chunk[...]
+            if skippingLine {
+                guard let newline = data.firstIndex(of: 0x0A) else { continue }
+                data = data[data.index(after: newline)...]
+                skippingLine = false
+            }
+            var lines = partial + data
+            // Keep an unterminated last line for next time.
+            if let lastNewline = lines.lastIndex(of: 0x0A) {
+                partial = Data(lines[lines.index(after: lastNewline)...])
+                lines = lines[..<lastNewline]
+            } else {
+                partial = lines
+                lines = Data()
+            }
+            if partial.count > Self.maxLine {
+                partial = Data()
+                skippingLine = true
+            }
+            for line in lines.split(separator: 0x0A) where !line.isEmpty && line.count <= Self.maxLine {
+                if let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] { ingest(obj) }
+            }
         }
         trim()
         summary.files = fileOrder.reversed().map {
@@ -147,6 +166,7 @@ public final class TranscriptReader {
     private func reset() {
         offset = 0
         partial = Data()
+        skippingLine = false
         summary = TranscriptSummary()
         toolIndex = [:]
         pendingTaskCreates = [:]

@@ -55,6 +55,17 @@ struct SettingsView: View {
                 Text("Switchboard adds hooks to your Claude Code settings so sessions report what they're doing. Your other hooks are left alone, and the file is backed up before every change.")
                     .font(.callout).foregroundStyle(.secondary)
             }
+            if !setup.foreignHooks.isEmpty {
+                Section {
+                    Label("Other hooks talk to Switchboard", systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(SessionStatus.blocked.color)
+                    Text("These entries in settings.json weren't added by Switchboard but connect to its socket. If you didn't add them, remove them.")
+                        .font(.callout).foregroundStyle(.secondary)
+                    ForEach(setup.foreignHooks, id: \.self) { command in
+                        Text(SafeText.reveal(command).text).font(.caption.monospaced()).textSelection(.enabled).lineLimit(3)
+                    }
+                }
+            }
             Section {
                 LabeledContent("Settings file") {
                     HStack {
@@ -64,7 +75,9 @@ struct SettingsView: View {
                         }
                     }
                 }
-                LabeledContent("Listening on") { Text("127.0.0.1:\(setup.port)").font(.callout.monospaced()) }
+                LabeledContent("Hooks connect to") {
+                    Text((setup.socketPath as NSString).abbreviatingWithTildeInPath).font(.callout.monospaced()).lineLimit(1).truncationMode(.middle)
+                }
             }
         }
         .formStyle(.grouped)
@@ -122,7 +135,7 @@ struct WelcomeView: View {
             Text("To connect, Switchboard will:").padding(.top, 2)
             VStack(alignment: .leading, spacing: 8) {
                 item("doc.badge.gearshape", "Add hooks to ~/.claude/settings.json", "Sessions report what they're doing. The file is backed up first and your other hooks are left alone.")
-                item("lock.shield", "Stay on your Mac", "Hooks talk to the app on 127.0.0.1 only. Session data stays in this Mac's Application Support folder.")
+                item("lock.shield", "Stay private", "Hooks talk to the app through a socket only your account can open, never the network. Session data stays in a private folder on this Mac.")
                 item("bell", "Ask to send notifications", "So a session that's blocked on you can get your attention.")
             }
             Toggle("Open Switchboard at login", isOn: $launchAtLogin).padding(.top, 2)
@@ -166,14 +179,18 @@ final class AppWindows: NSObject, NSWindowDelegate {
     func showDashboard(selecting id: String? = nil) {
         if let id { nav.selectedID = id }
         if dashboard == nil {
-            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1000, height: 640),
+            let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1100, height: 700),
                                   styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                                   backing: .buffered, defer: false)
             window.title = "Switchboard"
+            // Content runs up under a clear title bar, like Mail or Notes: no separate band with a title in it.
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.toolbarStyle = .unified
             let host = NSHostingController(rootView: makeDashboard())
             host.sizingOptions = [.minSize]  // the window keeps its own size, SwiftUI only sets the minimum
             window.contentViewController = host
-            window.setContentSize(NSSize(width: 1000, height: 640))
+            window.setContentSize(NSSize(width: 1100, height: 700))
             window.isReleasedWhenClosed = false
             window.delegate = self
             window.center()

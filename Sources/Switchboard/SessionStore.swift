@@ -49,7 +49,11 @@ final class SessionStore: ObservableObject {
         guard let id = event.sessionID else { return }
         let existing = sessions.first { $0.id == id }
         let cwd = event.cwd.isEmpty ? (existing?.cwd ?? "") : event.cwd
-        let transition = Reducer.apply(event, to: existing, branch: GitInfo.branch(for: cwd))
+        // The branch is looked up in the background: reading .git/HEAD in ~/Desktop or ~/Documents can wait on a
+        // macOS privacy prompt, and events must keep flowing meanwhile.
+        let branch = branches.keys.contains(cwd) ? branches[cwd]! : existing?.branch
+        let transition = Reducer.apply(event, to: existing, branch: branch)
+        refreshBranch(cwd)
 
         if let wait = transition.endedWait {
             db?.addIdle(wait)
@@ -163,6 +167,31 @@ final class SessionStore: ObservableObject {
         }
     }
 
+    /// Last known branch per working directory (nil: not a git repo, or not readable).
+    private var branches: [String: String?] = [:]
+    private var branchLookups: [String: Date] = [:]
+    private let gitQueue = DispatchQueue(label: "switchboard.git", qos: .utility)
+
+    private func refreshBranch(_ cwd: String) {
+        guard !cwd.isEmpty else { return }
+        if let started = branchLookups[cwd], Date().timeIntervalSince(started) < 3 { return }
+        branchLookups[cwd] = Date()
+        gitQueue.async { [weak self] in
+            let branch = GitInfo.branch(for: cwd)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.branches[cwd] = branch
+                var touched = false
+                for i in self.sessions.indices where self.sessions[i].cwd == cwd && self.sessions[i].branch != branch {
+                    self.sessions[i].branch = branch
+                    self.db?.save(self.sessions[i])
+                    touched = true
+                }
+                if touched { self.changed() }
+            }
+        }
+    }
+
     private func changed() {
         onActiveDecisionsChanged?(Set(sessions.compactMap(\.decisionID)))
         onUpdate?()
@@ -190,13 +219,5 @@ final class SessionStore: ObservableObject {
     private func refreshIdleTotal() {
         idleDay = IdleMath.dayKey(Date())
         idleTodayClosed = db?.idleSeconds(day: idleDay) ?? 0
-    }
-
-    func snapshotJSON() -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
-        struct Snapshot: Encodable { let sessions: [Session]; let idleTodaySeconds: Double }
-        return (try? encoder.encode(Snapshot(sessions: sessions, idleTodaySeconds: idleToday().rounded()))) ?? Data("{}".utf8)
     }
 }

@@ -14,7 +14,8 @@ DERIVED=.build/xcode
 MODE="${1:-}"
 
 xcodebuild -project Switchboard.xcodeproj -scheme Switchboard -configuration Release \
-    -destination "platform=macOS" -derivedDataPath "$DERIVED" -quiet build
+    -destination "platform=macOS" -derivedDataPath "$DERIVED" -quiet \
+    CODE_SIGN_INJECT_BASE_ENTITLEMENTS=NO build  # no get-task-allow: nothing can attach a debugger to it
 
 APP=build/Switchboard.app
 rm -rf "$APP"

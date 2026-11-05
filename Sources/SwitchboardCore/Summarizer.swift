@@ -32,7 +32,7 @@ public enum Summarizer {
 
     public static func prettyJSON(_ obj: Any) -> String {
         guard JSONSerialization.isValidJSONObject(obj),
-              let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]),
+              let data = try? JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]),
               let s = String(data: data, encoding: .utf8) else { return "\(obj)" }
         return s
     }

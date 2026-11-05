@@ -14,7 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // A second copy (e.g. login item plus a manual launch) would lose the port race; leave the first one running.
+        // A second copy (e.g. login item plus a manual launch) would unlink and replace the first one's socket;
+        // leave the first one running.
         if let id = Bundle.main.bundleIdentifier,
            NSRunningApplication.runningApplications(withBundleIdentifier: id).contains(where: { $0 != .current }) {
             NSLog("Switchboard: already running, exiting")
@@ -23,12 +24,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         Self.migrateDefaults()
-        let port = UInt16(ProcessInfo.processInfo.environment["SWITCHBOARD_PORT"] ?? "") ?? 7777
+        let customSocket = ProcessInfo.processInfo.environment["SWITCHBOARD_SOCKET"]
+        let socketPath = customSocket ?? HookInstaller.defaultSocketPath
         let dbPath = ProcessInfo.processInfo.environment["SWITCHBOARD_DB"] ?? Database.defaultPath
 
         store = SessionStore(databasePath: dbPath)
         notifier = Notifier()
-        setup = Setup(port: Int(port))
+        Self.makeDataFolderPrivate((dbPath as NSString).deletingLastPathComponent)
+        setup = Setup(socket: customSocket.map { "\"\($0)\"" } ?? HookInstaller.defaultSocketArgument, socketPath: socketPath)
         panel = PanelController(store: store, ui: ui, setup: setup,
                                 onFocus: { [weak self] id in self?.focus(id) },
                                 onDecide: { [weak self] id, decision in self?.store.decide(id, decision) },
@@ -61,9 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.ui.expandedID = id
         }
 
-        server = EventServer(port: port,
-                             onEvent: { [weak self] in self?.store.apply($0) },
-                             snapshot: { [weak self] in self?.store.snapshotJSON() ?? Data() })
+        server = EventServer(path: socketPath, onEvent: { [weak self] in self?.store.apply($0) })
         server.onStateChange = { [weak self] error in self?.store.serverError = error }
         server.onRequestGone = { [weak self] id in self?.store.requestGone(id) }
         store.onDecide = { [weak self] id, decision in self?.server.decide(id, decision) }
@@ -99,6 +100,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         hotKey = HotKey { [weak self] in self?.panel.toggle() }
         panel.show()
+        // Development: open the Dashboard straight away (screenshots, UI work).
+        if ProcessInfo.processInfo.environment["SWITCHBOARD_OPEN_DASHBOARD"] != nil { windows.showDashboard(selecting: nil) }
         installStatusItem()
         Watchdog.start()
     }
@@ -122,6 +125,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func togglePill() { panel.toggle() }
     @objc private func openDashboard() { windows.showDashboard(selecting: nil) }
     @objc private func openSettings() { windows.showSettings() }
+
+    /// Session details, transcripts' contents and attachments are nobody else's business: 0700 folders, 0600 files.
+    private static func makeDataFolderPrivate(_ folder: String) {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: folder, withIntermediateDirectories: true)
+        chmod(folder, 0o700)
+        for item in (fm.enumerator(atPath: folder)?.allObjects as? [String]) ?? [] {
+            var isDir: ObjCBool = false
+            let path = folder + "/" + item
+            guard fm.fileExists(atPath: path, isDirectory: &isDir) else { continue }
+            chmod(path, isDir.boolValue ? 0o700 : 0o600)
+        }
+    }
 
     /// Settings saved under the app's previous bundle id (pill position, toggles) carry over once.
     private static func migrateDefaults() {
